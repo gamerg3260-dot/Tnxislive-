@@ -24,12 +24,17 @@ import com.example.weather.WeatherResult
 import com.example.weather.CurrentWeatherInfo
 import com.example.router.LocalCommandRouter
 import com.example.router.LocalExecutionResult
+import com.example.router.CommandRouter
+import com.example.router.CommandCategory
+import com.example.router.CommandRoutingDecision
 import com.example.router.IntentClassifier
 import com.example.router.InputCategory
 import com.example.router.IntentClassificationResult
 import com.example.router.CommandParser
 import com.example.router.ParsedCommand
 import com.example.router.ParsedIntent
+import com.example.router.IntelligenceLayerEngine
+import com.example.router.IntelligenceDecision
 import com.example.voice.MaxVoiceManager
 import com.example.camera.MaxCameraManager
 import com.example.camera.CameraCaptureResult
@@ -390,514 +395,291 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private var pendingConfirmationDecision: CommandRoutingDecision? = null
+
     fun processCommand(commandText: String) {
         if (commandText.isBlank()) return
         _lastVoiceInput.value = commandText
         addLog("आवाज रिकॉर्ड हुई: \"$commandText\"")
 
         viewModelScope.launch {
-            // =========================================================================
-            // STEP 0A: INTENT & ENTITY EXTRACTION (CommandParser)
-            // =========================================================================
-            var parsedCommand = CommandParser.parse(commandText)
-            val addressLog = if (parsedCommand.extractedAddress != null) " (संबोधन: '${parsedCommand.extractedAddress}')" else ""
-            addLog("[PARSER] इनपुट: '$commandText'$addressLog ➔ फिल्टर: '${parsedCommand.cleanedQuery}' | Intent: ${parsedCommand.intent} | Entity: '${parsedCommand.targetEntity}'")
+            // Check for Pending Confirmation Response
+            val pending = pendingConfirmationDecision
+            if (pending != null) {
+                if (IntelligenceLayerEngine.isAffirmative(commandText)) {
+                    addLog("LAYER2_CONFIDENCE: User CONFIRMED action -> Executing ${pending.matchedAppName}")
+                    pendingConfirmationDecision = null
+                    executeDecision(pending, commandText)
+                    return@launch
+                } else if (IntelligenceLayerEngine.isNegative(commandText)) {
+                    addLog("LAYER2_CONFIDENCE: User DENIED action -> Cancellation")
+                    pendingConfirmationDecision = null
+                    _statusMessage.value = "ठीक है, कैंसिल कर दिया गया।"
+                    voiceManager.speak("Thik hai, cancel kar diya.", 0.98f)
+                    _agentStatus.value = AgentStatus.IDLE
+                    return@launch
+                } else {
+                    pendingConfirmationDecision = null
+                }
+            }
 
             // =========================================================================
-            // STEP 0B: INCOMING CALL VOICE CONTROL (Priority 1: उठा लो / काट दो / मैक्स तुम बात करो)
+            // 4 ADVANCED INTELLIGENCE LAYERS + 5-STAGE COMMAND ROUTER
             // =========================================================================
+            val intelDecision = IntelligenceLayerEngine.processWithIntelligence(getApplication(), commandText)
+            val decision = intelDecision.baseRoutingDecision
+
+            // Emit exact 5 Debug Log lines required for STAGE 1-5
+            addLog("STAGE1_CLEANED: ${decision.cleanedCommand}")
+            addLog("STAGE2_CATEGORY: ${decision.category}")
+            addLog("STAGE3_APP_MATCHED: ${decision.matchedAppName ?: "NONE"}")
+            addLog("STAGE3_REMAINING_INSTRUCTION: ${decision.remainingInstruction ?: "NONE"}")
+            addLog("STAGE4_ACTION: ${decision.actionSummary}")
+
+            // Emit 4 INTELLIGENCE LAYER Debug Logs
+            addLog(intelDecision.logLayer1)
+            addLog(intelDecision.logLayer2)
+            addLog(intelDecision.logLayer3)
+            addLog(intelDecision.logLayer4)
+
+            // Priority Call Control (if ringing)
             if (callControlManager.currentCall.value?.status == CallStatus.RINGING) {
-                addLog("[वर्गीकरण: टास्क (TASK)] 📞 इनकमिंग कॉल बज रही है: वॉयस कमांड का मिलान किया जा रहा है...")
                 val callHandled = callControlManager.tryHandleCallVoiceCommand(commandText)
                 if (callHandled) {
-                    repository.logCommand(
-                        prompt = commandText,
-                        app = "Phone / Call Control",
-                        actionType = "CALL_VOICE_ACTION",
-                        actionDetails = "Voice command executed during ringing incoming call",
-                        responseHindi = "कॉल आदेश निष्पादित किया गया",
-                        success = true
-                    )
                     _agentStatus.value = AgentStatus.IDLE
                     return@launch
                 }
             }
 
-            _agentStatus.value = AgentStatus.THINKING
-            _statusMessage.value = "कमांड का विश्लेषण हो रहा है..."
-
-            // =========================================================================
-            // STEP 1: LOCAL COMMAND ROUTER FIRST (Offline, Zero Latency, App Launch, System Toggles, Navigation, Lock)
-            // =========================================================================
-            var localResult = localCommandRouter.tryRouteLocally(commandText, parsedCommand)
-
-            // Ambiguity Fallback: If local route failed and parser confidence is low, ask Gemini for structured JSON classification
-            if (localResult !is LocalExecutionResult.Handled && (parsedCommand.intent == ParsedIntent.UNKNOWN || parsedCommand.confidence < 0.6f)) {
-                addLog("🤔 लोकल पार्सिंग अस्पष्ट है: जेमिनी से स्ट्रक्चर्ड JSON इंटेंट/एंटीटी विश्लेषण मांगा जा रहा है...")
-                val geminiParsed = geminiClient.parseCommandViaGemini(commandText)
-                if (geminiParsed.intent != ParsedIntent.UNKNOWN && geminiParsed.targetEntity.isNotBlank()) {
-                    parsedCommand = geminiParsed
-                    addLog("[GEMINI PARSER] जेमिनी निष्कर्ष: Intent = ${parsedCommand.intent}, Target = '${parsedCommand.targetEntity}'")
-                    // Retry local router with Gemini structured parse
-                    localResult = localCommandRouter.tryRouteLocally(commandText, parsedCommand)
-                }
-            }
-
-            if (localResult is LocalExecutionResult.Handled) {
-                addLog("⚡ REAL ACTION: ${localResult.actionType} -> ${localResult.messageHindi}")
+            // LAYER 4 — Self-Correction Triggered
+            if (intelDecision.isSelfCorrection) {
                 _agentStatus.value = AgentStatus.EXECUTING
-                _statusMessage.value = localResult.messageHindi
-
-                // Also update simulator if app was opened and user is in simulator mode
-                if (commandText.contains("youtube", ignoreCase = true) || commandText.contains("यूट्यूब", ignoreCase = true)) {
-                    simulatorState.clearTapIndicator()
-                }
-
-                // Log to Room Database
-                repository.logCommand(
-                    prompt = commandText,
-                    app = "System / Local",
-                    actionType = localResult.actionType,
-                    actionDetails = "Executed immediately offline via LocalCommandRouter",
-                    responseHindi = localResult.voiceResponseHindi,
-                    success = localResult.success
-                )
-
-                // Update activity context & auto-prune
-                repository.saveActivityContext("System", localResult.actionType)
-                repository.pruneAndOptimizeMemory()
-
-                // Speak voice confirmation
-                _agentStatus.value = AgentStatus.SPEAKING
-                _statusMessage.value = localResult.voiceResponseHindi
-                voiceManager.speak(localResult.voiceResponseHindi, speechRate.value)
-
-                // Special handling for Phone Lock: TTS starts speaking first, then lockNow() locks screen
-                if (localResult.actionType == "LOCK_PHONE") {
-                    addLog("🔒 डिवाइस एडमिन: फोन तुरंत लॉक किया जा रहा है...")
-                    delay(450)
-                    antiTheftManager.lockDeviceNow()
-                    _agentStatus.value = AgentStatus.IDLE
-                    return@launch
-                }
-
-                delay(1800)
-                if (_agentStatus.value == AgentStatus.SPEAKING) {
-                    _agentStatus.value = AgentStatus.IDLE
-                    _statusMessage.value = "मैक्स तैयार है।"
-                }
+                addLog("🔄 REVERTING LAST ACTION (Self-Correction)")
+                localCommandRouter.tryRouteLocally("back")
+                val msg = intelDecision.correctionMessageHindi ?: "माफ़ कीजिये, पिछला एक्शन कैंसिल कर दिया गया है।"
+                _statusMessage.value = msg
+                voiceManager.speak(msg, 0.98f)
+                _agentStatus.value = AgentStatus.IDLE
                 return@launch
             }
 
-            // =========================================================================
-            // STEP 2: OFFLINE REMINDERS & ALARMS (AlarmManager + Room Database)
-            // =========================================================================
-            if (reminderManager.isReminderOrAlarmCommand(commandText)) {
-                addLog("[वर्गीकरण: टास्क (TASK)] ⏰ रिमाइंडर/अलार्म कमांड: ऑफलाइन AlarmManager में प्रोसेस हो रहा है...")
-                _agentStatus.value = AgentStatus.EXECUTING
-                _statusMessage.value = "रिमाइंडर प्रोसेस हो रहा है..."
-
-                val result = reminderManager.handleVoiceCommand(commandText)
-                val (msgHindi, voiceHindi, success) = when (result) {
-                    is ReminderActionResult.Scheduled -> Triple(result.messageHindi, result.voiceResponseHindi, true)
-                    is ReminderActionResult.Cancelled -> Triple(result.messageHindi, result.voiceResponseHindi, true)
-                    is ReminderActionResult.Listed -> Triple(result.messageHindi, result.voiceResponseHindi, true)
-                    is ReminderActionResult.Error -> Triple(result.messageHindi, result.voiceResponseHindi, false)
-                }
-
-                addLog("रिमाइंडर परिणाम: $msgHindi")
-                repository.logCommand(
-                    prompt = commandText,
-                    app = "Reminders / Alarms",
-                    actionType = "REMINDER_OFFLINE",
-                    actionDetails = msgHindi,
-                    responseHindi = voiceHindi,
-                    success = success
-                )
-
-                _agentStatus.value = AgentStatus.SPEAKING
-                _statusMessage.value = msgHindi
-                voiceManager.speak(voiceHindi, speechRate.value)
-
-                delay(2400)
-                if (_agentStatus.value == AgentStatus.SPEAKING) {
-                    _agentStatus.value = AgentStatus.IDLE
-                    _statusMessage.value = "मैक्स तैयार है।"
-                }
+            // LAYER 1 — Context Clarification Needed
+            if (intelDecision.needsContextClarification) {
+                val prompt = intelDecision.clarificationPromptHindi ?: "किसका मतलब है? कृपया ऐप का नाम बताएं।"
+                _statusMessage.value = prompt
+                voiceManager.speak(prompt, 0.98f)
+                _agentStatus.value = AgentStatus.IDLE
                 return@launch
             }
 
-            // =========================================================================
-            // STEP 3: LIVE WEATHER FORECAST (Open-Meteo Free API + FusedLocation)
-            // =========================================================================
-            if (weatherManager.isWeatherCommand(commandText)) {
-                addLog("[वर्गीकरण: टास्क (TASK)] 🌤 मौसम कमांड: FusedLocation + Open-Meteo API से डेटा लाया जा रहा है...")
-                _agentStatus.value = AgentStatus.EXECUTING
-                _isFetchingWeather.value = true
-                _statusMessage.value = "वर्तमान स्थान का मौसम प्राप्त हो रहा है..."
-
-                val weatherResult = weatherManager.fetchCurrentWeather()
-                _isFetchingWeather.value = false
-
-                val (msgHindi, voiceHindi, success) = when (weatherResult) {
-                    is WeatherResult.Success -> {
-                        _currentWeather.value = weatherResult.weather
-                        Triple(weatherResult.messageHindi, weatherResult.voiceResponseHindi, true)
-                    }
-                    is WeatherResult.PermissionRequired -> {
-                        Triple(weatherResult.messageHindi, weatherResult.voiceResponseHindi, false)
-                    }
-                    is WeatherResult.Error -> {
-                        Triple(weatherResult.messageHindi, weatherResult.voiceResponseHindi, false)
-                    }
-                }
-
-                addLog("मौसम परिणाम: $msgHindi")
-                repository.logCommand(
-                    prompt = commandText,
-                    app = "Weather / Open-Meteo",
-                    actionType = "WEATHER_QUERY",
-                    actionDetails = msgHindi,
-                    responseHindi = voiceHindi,
-                    success = success
-                )
-
-                _agentStatus.value = AgentStatus.SPEAKING
-                _statusMessage.value = voiceHindi
-                voiceManager.speak(voiceHindi, speechRate.value)
-
-                delay(2600)
-                if (_agentStatus.value == AgentStatus.SPEAKING) {
-                    _agentStatus.value = AgentStatus.IDLE
-                    _statusMessage.value = "मैक्स तैयार है।"
-                }
+            // LAYER 2 — User Confirmation Needed
+            if (intelDecision.needsUserConfirmation) {
+                pendingConfirmationDecision = decision
+                val prompt = intelDecision.confirmationPromptHindi ?: "क्या आपका मतलब ${decision.matchedAppName} से है?"
+                _statusMessage.value = prompt
+                voiceManager.speak(prompt, 0.98f)
+                _agentStatus.value = AgentStatus.IDLE
                 return@launch
             }
 
-            // =========================================================================
-            // STEP 4: CAMERA, SELFIE & SCENE ANALYSIS (CameraX + MediaStore + Gemini Vision)
-            // =========================================================================
-            if (cameraManager.isCameraCommand(commandText)) {
-                addLog("[वर्गीकरण: टास्क (TASK)] 📷 कैमरा/सेल्फी कमांड...")
-                if (!cameraManager.hasCameraPermission()) {
-                    val permMsg = "कैमरा की अनुमति (Camera Permission) नहीं है। कृपया पहले सेटिंग्स में अनुमति दें।"
-                    addLog("चेतावनी: कैमरा परमिशन उपलब्ध नहीं है।")
-                    _agentStatus.value = AgentStatus.SPEAKING
-                    _statusMessage.value = permMsg
-                    voiceManager.speak(permMsg, speechRate.value)
-                    return@launch
-                }
+            // Execute Decision
+            executeDecision(decision, commandText)
+        }
+    }
 
-                if (cameraManager.isSceneAnalysisCommand(commandText)) {
-                    // Scene Analysis with Gemini Vision
-                    addLog("🔍 AI दृश्य विश्लेषण: कैमरा फ्रेम कैप्चर कर जेमिनी विज़न से विश्लेषण कराया जा रहा है...")
-                    _agentStatus.value = AgentStatus.EXECUTING
-                    _isCameraProcessing.value = true
-                    _statusMessage.value = "कैमरे के दृश्य को समझा जा रहा है..."
+    private suspend fun executeDecision(decision: CommandRoutingDecision, rawCommandText: String) {
+        // Update short-term context memory in Layer 1
+        IntelligenceLayerEngine.updateActiveContext(
+            appName = decision.matchedAppName,
+            actionType = decision.category.name,
+            rawCommand = rawCommandText,
+            cleanedCommand = decision.cleanedCommand,
+            category = decision.category
+        )
 
-                    val captureRes = cameraManager.capturePhoto(isFrontCamera = false, saveToGallery = false)
-                    if (captureRes.isSuccess) {
-                        val capResult = captureRes.getOrThrow()
-                        _lastCameraCapture.value = capResult
-
-                        // Ultra low-latency natural filler if network/vision takes > 380ms
-                        val fillerJob = viewModelScope.launch {
-                            delay(380)
-                            if (_isCameraProcessing.value) {
-                                voiceManager.speakInstantFiller("ठीक है, अभी सामने देख रहा हूँ...")
-                            }
-                        }
-
-                        val visionExplanation = geminiClient.analyzeImageWithVision(capResult.bitmap)
-                        fillerJob.cancel()
-                        _sceneAnalysisText.value = visionExplanation
-                        _isCameraProcessing.value = false
-
-                        addLog("AI विज़न विश्लेषण: $visionExplanation")
-                        repository.logCommand(
-                            prompt = commandText,
-                            app = "Camera / Gemini Vision",
-                            actionType = "SCENE_ANALYSIS",
-                            actionDetails = visionExplanation,
-                            responseHindi = visionExplanation,
-                            success = true
-                        )
-
-                        _agentStatus.value = AgentStatus.SPEAKING
-                        _statusMessage.value = visionExplanation
-                        voiceManager.speak(visionExplanation, 1.0f)
-
-                        delay(3500)
-                        if (_agentStatus.value == AgentStatus.SPEAKING) {
-                            _agentStatus.value = AgentStatus.IDLE
-                            _statusMessage.value = "मैक्स तैयार है।"
-                        }
-                    } else {
-                        _isCameraProcessing.value = false
-                        val errorMsg = "कैमरा से फ्रेम लेने में समस्या आई।"
-                        _agentStatus.value = AgentStatus.IDLE
-                        _statusMessage.value = errorMsg
-                        addLog("त्रुटि: ${captureRes.exceptionOrNull()?.localizedMessage}")
-                        voiceManager.speak(errorMsg, 1.0f)
-                    }
-                    return@launch
-                }
-
-                // Photo or Selfie capture
-                val isFront = cameraManager.isFrontCamera(commandText)
-                addLog(if (isFront) "📸 सेल्फी कमांड: फ्रंट कैमरा से फोटो कैप्चर हो रही है..." else "📷 फोटो कमांड: बैक कैमरा से फोटो खींची जा रही है...")
+        when (decision.category) {
+            CommandCategory.OFFLINE_TASK -> {
                 _agentStatus.value = AgentStatus.EXECUTING
-                _isCameraProcessing.value = true
-                _statusMessage.value = if (isFront) "सेल्फी ली जा रही है..." else "फोटो खींची जा रही है..."
+                _statusMessage.value = "लोकल टास्क निष्पादित हो रहा है..."
 
-                val captureRes = cameraManager.capturePhoto(isFrontCamera = isFront, saveToGallery = true)
-                _isCameraProcessing.value = false
+                // 1. Check Alarm / Reminders
+                if (reminderManager.isReminderOrAlarmCommand(decision.cleanedCommand)) {
+                    val result = reminderManager.handleVoiceCommand(decision.cleanedCommand)
+                    val (msgHindi, voiceHindi, success) = when (result) {
+                        is ReminderActionResult.Scheduled -> Triple(result.messageHindi, result.voiceResponseHindi, true)
+                        is ReminderActionResult.Cancelled -> Triple(result.messageHindi, result.voiceResponseHindi, true)
+                        is ReminderActionResult.Listed -> Triple(result.messageHindi, result.voiceResponseHindi, true)
+                        is ReminderActionResult.Error -> Triple(result.messageHindi, result.voiceResponseHindi, false)
+                    }
+                    addLog("⏰ रिमाइंडर: $msgHindi")
+                    _statusMessage.value = msgHindi
+                    voiceManager.speak(voiceHindi, 0.98f)
+                    _agentStatus.value = AgentStatus.IDLE
+                    return
+                }
 
-                if (captureRes.isSuccess) {
-                    val capResult = captureRes.getOrThrow()
-                    _lastCameraCapture.value = capResult
-                    _sceneAnalysisText.value = null
+                // 2. Check Camera
+                if (cameraManager.isCameraCommand(decision.cleanedCommand)) {
+                    val isFront = cameraManager.isFrontCamera(decision.cleanedCommand)
+                    val capRes = cameraManager.capturePhoto(isFrontCamera = isFront, saveToGallery = true)
+                    val msg = if (capRes.isSuccess) {
+                        if (isFront) "सेल्फी कैप्चर हो गई!" else "फोटो खींच ली गई!"
+                    } else "कैमरा से फोटो नहीं खींची जा सकी।"
+                    addLog("📷 कैमरा: $msg")
+                    _statusMessage.value = msg
+                    voiceManager.speak(msg, 0.98f)
+                    _agentStatus.value = AgentStatus.IDLE
+                    return
+                }
 
-                    val successVoice = if (isFront) "आपकी सेल्फी ले ली गई है और गैलरी में सेव कर दी गई है।" else "फोटो ले ली गई है।"
-                    val successDetails = "फोटो सेव: ${capResult.filePath ?: "DCIM/Max"}"
-                    addLog("सफलता: $successDetails")
+                // 3. Local Command Router (Toggles, Nav, Lock, or App Launch)
+                var localResult = localCommandRouter.tryRouteLocally(decision.cleanedCommand)
+                if (localResult !is LocalExecutionResult.Handled && decision.matchedAppName != null) {
+                    localResult = localCommandRouter.launchAppByName(decision.matchedAppName, decision.matchedAppPackage)
+                }
+
+                if (localResult is LocalExecutionResult.Handled) {
+                    addLog("⚡ REAL LOCAL ACTION: ${localResult.actionType} -> ${localResult.messageHindi}")
+                    _statusMessage.value = localResult.messageHindi
+                    voiceManager.speak(localResult.voiceResponseHindi, 0.98f)
 
                     repository.logCommand(
-                        prompt = commandText,
-                        app = "Camera / MediaStore",
-                        actionType = if (isFront) "TAKE_SELFIE" else "TAKE_PHOTO",
-                        actionDetails = successDetails,
-                        responseHindi = successVoice,
-                        success = true
+                        prompt = rawCommandText,
+                        app = "System / Local",
+                        actionType = localResult.actionType,
+                        actionDetails = localResult.messageHindi,
+                        responseHindi = localResult.voiceResponseHindi,
+                        success = localResult.success
                     )
 
-                    _agentStatus.value = AgentStatus.SPEAKING
-                    _statusMessage.value = successVoice
-                    voiceManager.speak(successVoice, speechRate.value)
-
-                    delay(2500)
-                    if (_agentStatus.value == AgentStatus.SPEAKING) {
-                        _agentStatus.value = AgentStatus.IDLE
-                        _statusMessage.value = "मैक्स तैयार है।"
+                    if (localResult.actionType == "LOCK_PHONE") {
+                        delay(450)
+                        antiTheftManager.lockDeviceNow()
                     }
                 } else {
-                    val errorMsg = "फोटो खींचने में समस्या आई।"
-                    _agentStatus.value = AgentStatus.IDLE
-                    _statusMessage.value = errorMsg
-                    voiceManager.speak(errorMsg, speechRate.value)
+                    val notFoundMsg = "माफ़ कीजिये, '${decision.cleanedCommand}' डिवाइस पर निष्पादित नहीं हो सका।"
+                    _statusMessage.value = notFoundMsg
+                    voiceManager.speak(notFoundMsg, 0.98f)
                 }
-                return@launch
+
+                _agentStatus.value = AgentStatus.IDLE
+                return
             }
 
-            // =========================================================================
-            // STEP 5: ANTI-THEFT VOICE COMMANDS & EMERGENCY CONTACT SETUP
-            // =========================================================================
-            val lowerCommand = commandText.lowercase()
-            if (isAntiTheftVoiceCommand(lowerCommand)) {
-                addLog("[वर्गीकरण: टास्क (TASK)] 🛡 एंटी-थेफ्ट कमांड...")
-                handleAntiTheftVoiceCommand(commandText, lowerCommand)
-                return@launch
-            }
-
-            // =========================================================================
-            // STEP 6: EXPLICIT USER PREFERENCE / HABIT LEARNING ("Mujhe Hindi gaane pasand hain")
-            // =========================================================================
-            val extractedPref = MemoryManager.extractUserPreference(commandText)
-            if (extractedPref != null) {
-                addLog("[वर्गीकरण: मेमोरी (MEMORY)] स्थानीय मेमोरी: यूजर की नई पसंद सीखी गई -> ${extractedPref.key}: ${extractedPref.value}")
-                repository.saveMemory(
-                    key = extractedPref.key,
-                    value = extractedPref.value,
-                    category = extractedPref.category,
-                    descHindi = extractedPref.descriptionHindi
-                )
-                repository.logCommand(
-                    prompt = commandText,
-                    app = "Max Local Memory",
-                    actionType = "LEARN_PREFERENCE",
-                    actionDetails = "${extractedPref.key} = ${extractedPref.value}",
-                    responseHindi = extractedPref.acknowledgementHindi,
-                    success = true
-                )
-
-                repository.pruneAndOptimizeMemory()
-
-                _agentStatus.value = AgentStatus.SPEAKING
-                _statusMessage.value = extractedPref.acknowledgementHindi
-                voiceManager.speak(extractedPref.acknowledgementHindi, speechRate.value)
-
-                delay(1800)
-                if (_agentStatus.value == AgentStatus.SPEAKING) {
-                    _agentStatus.value = AgentStatus.IDLE
-                    _statusMessage.value = "मैक्स तैयार है।"
-                }
-                return@launch
-            }
-
-            // =========================================================================
-            // STEP 7: SMART INTENT CLASSIFICATION (Conversation vs Complex In-App Automation)
-            // =========================================================================
-            val classification = intentClassifier.classify(commandText)
-            val isConversation = classification.category == InputCategory.CONVERSATION_CHAT
-
-            addLog("[वर्गीकरण: ${if (isConversation) "बातचीत (CONVERSATION)" else "टास्क (TASK)"}] ${classification.reason}")
-
-            // -------------------------------------------------------------------------
-            // IF CONVERSATION / QUESTION: ANSWER DIRECTLY WITH NATURAL HINDI (NO DEVICE ACTIONS)
-            // -------------------------------------------------------------------------
-            if (isConversation) {
-                addLog("💬 बातचीत / सवाल: जेमिनी से उत्तर प्राप्त किया जा रहा है...")
+            CommandCategory.SCREEN_TASK -> {
                 _agentStatus.value = AgentStatus.THINKING
-                _statusMessage.value = "सोच रहा हूँ..."
+                _statusMessage.value = "स्क्रीन टास्क प्रोसेस हो रहा है..."
 
-                val memories = repository.allMemories.first()
-                val replyText = geminiClient.generateConversationalReply(commandText, memories)
-
-                addLog("मैक्स उत्तर: $replyText")
-                repository.logCommand(
-                    prompt = commandText,
-                    app = "Max Conversation / Gemini",
-                    actionType = "CONVERSATION_REPLY",
-                    actionDetails = "Answered naturally in Hindi without triggering device actions",
-                    responseHindi = replyText,
-                    success = true
-                )
-
-                _agentStatus.value = AgentStatus.SPEAKING
-                _statusMessage.value = replyText
-                voiceManager.speak(replyText, speechRate.value)
-
-                delay(3000)
-                if (_agentStatus.value == AgentStatus.SPEAKING) {
-                    _agentStatus.value = AgentStatus.IDLE
-                    _statusMessage.value = "मैक्स तैयार है।"
-                }
-                return@launch
-            }
-
-            // =========================================================================
-            // STEP 8: COMPLEX COMMAND WITH CONTEXT & MEMORY REASONING (Gemini Vision + Accessibility Tree)
-            // =========================================================================
-            addLog("जटिल/विजुअल कमांड: समानांतर (Parallel) डेटा और स्क्रीन फेच शुरू...")
-            _statusMessage.value = "मैक्स सोच रहा है और स्क्रीन का विश्लेषण कर रहा है..."
-
-            try {
-                // PARALLEL COROUTINES for zero-latency concurrent context gathering
-                val memoriesDeferred = async(Dispatchers.IO) { repository.getAllMemoriesList() }
-                val recentHistoryDeferred = async(Dispatchers.IO) { repository.getRecentHistoryList(6) }
-                val snapshotDeferred = async(Dispatchers.Default) {
-                    val realService = MaxAccessibilityService.instance
-                    if (realService != null) {
-                        val realSnapshot = realService.captureCurrentScreen()
-                        if (realSnapshot.elements.isNotEmpty() || realSnapshot.packageName.isNotBlank()) {
-                            return@async realSnapshot
-                        }
-                    }
-                    if (_useSimulatorMode.value) {
-                        simulatorState.generateSnapshot()
-                    } else {
-                        ScreenSnapshot(packageName = "android", timestamp = System.currentTimeMillis())
-                    }
+                // Step 1: Open app locally if target app matched & not open
+                if (decision.matchedAppName != null) {
+                    addLog("📱 Step 1: Target app '${decision.matchedAppName}' khola ja raha hai...")
+                    localCommandRouter.launchAppByName(decision.matchedAppName, decision.matchedAppPackage)
+                    delay(800)
                 }
 
-                // Build active screen activity context (e.g. "YouTube: Playing Video X")
-                val activeActivityContext: String = if (MaxAccessibilityService.instance != null) {
-                    val currentApp = MaxAccessibilityService.currentPackageName.value
-                    val screenNodes = MaxAccessibilityService.instance?.captureCurrentScreen()?.elements ?: emptyList()
-                    val topTitle = screenNodes.firstOrNull { it.text.length > 5 }?.text ?: ""
-                    if (topTitle.isNotBlank()) "$currentApp ($topTitle)" else currentApp.ifBlank { "Android Home/App" }
-                } else if (_useSimulatorMode.value) {
-                    val currentVid = simulatorState.currentVideo.value
-                    val isAd = simulatorState.isAdActive.value
-                    buildString {
-                        append("YouTube Simulator: ")
-                        append("Playing '${currentVid.title}' by ${currentVid.channel}")
-                        if (isAd) append(" (Ad active)")
-                    }
-                } else {
-                    "Android System"
-                }
+                // Step 2: Screen Perception & Execution via Gemini
+                val remainingQuery = decision.remainingInstruction ?: decision.cleanedCommand
+                addLog("👁️ Step 2: Screen perception active for: '$remainingQuery'")
 
-                val recentHistory = recentHistoryDeferred.await()
+                val memoriesDeferred = viewModelScope.async(Dispatchers.IO) { repository.getAllMemoriesList() }
+                val historyDeferred = viewModelScope.async(Dispatchers.IO) { repository.getRecentHistoryList(6) }
+                val snapshot = captureActiveScreenSnapshot()
+
                 val memories = memoriesDeferred.await()
-                val snapshot = snapshotDeferred.await()
+                val history = historyDeferred.await()
 
-                // Resolve contextual references (e.g., "wahi wala fir se chalao", "iska volume")
-                val resolvedCommand = MemoryManager.resolveContextualQuery(commandText, recentHistory, activeActivityContext)
-                if (resolvedCommand != commandText) {
-                    addLog("संदर्भ समाधान: \"$commandText\" -> \"$resolvedCommand\"")
-                }
-
-                addLog("स्क्रीन पर ${snapshot.elements.size} नोड्स मिले (App: ${snapshot.packageName}) | पैरेलल फेच पूर्ण")
-
-                // Natural conversational filler job if cloud network takes > 380ms
-                var hasReceivedAction = false
-                val fillerJob = launch {
-                    delay(380)
-                    if (!hasReceivedAction && _agentStatus.value == AgentStatus.THINKING) {
-                        voiceManager.speakInstantFiller("ठीक है, अभी करता हूँ...")
-                    }
-                }
-
-                // Query Gemini Multimodal AI with Context & Memory (Flash model + LRU Action Cache)
                 val action = geminiClient.decideAction(
-                    userCommand = resolvedCommand,
+                    userCommand = remainingQuery,
                     screenSnapshot = snapshot,
                     memories = memories,
-                    recentHistory = recentHistory,
-                    activityContext = activeActivityContext
+                    recentHistory = history
                 )
-                hasReceivedAction = true
-                fillerJob.cancel()
-                _lastAction.value = action
 
-                addLog("एआई निर्णय: ${action.actionType} | कारण: ${action.reasonHindi}")
-
-                // Execute complex UI action and speak in tandem for instant feeling
-                _agentStatus.value = AgentStatus.EXECUTING
                 _statusMessage.value = action.voiceResponseHindi
-
-                // Speak immediately with natural conversational speed
                 voiceManager.speak(action.voiceResponseHindi, 0.98f)
 
                 val execResult = executeAssistantAction(action)
                 addLog("एक्शन परिणाम: ${execResult.message}")
 
-                // Save to Room database
                 repository.logCommand(
-                    prompt = commandText,
-                    app = snapshot.packageName.ifBlank { "YouTube" },
+                    prompt = rawCommandText,
+                    app = snapshot.packageName.ifBlank { decision.matchedAppName ?: "Active App" },
                     actionType = action.actionType.name,
-                    actionDetails = "${action.targetElementDesc} @ (${action.targetX}, ${action.targetY})",
+                    actionDetails = execResult.message,
                     responseHindi = action.voiceResponseHindi,
                     success = execResult.success
                 )
 
-                // Update user memory and active activity context
-                if (action.textToType.isNotBlank()) {
-                    repository.saveMemory("last_played_topic", action.textToType, UserMemoryEntity.CATEGORY_ACTIVITY_CONTEXT, "हाल ही में सर्च/चलाई गई चीज़")
+                _agentStatus.value = AgentStatus.IDLE
+                return
+            }
+
+            CommandCategory.CONVERSATION -> {
+                _agentStatus.value = AgentStatus.THINKING
+                _statusMessage.value = "मैक्स सोच रहा है..."
+
+                // Weather Check
+                if (weatherManager.isWeatherCommand(decision.cleanedCommand)) {
+                    val weatherResult = weatherManager.fetchCurrentWeather()
+                    if (weatherResult is WeatherResult.Success) {
+                        _currentWeather.value = weatherResult.weather
+                        addLog("🌤 मौसम: ${weatherResult.messageHindi}")
+                        _statusMessage.value = weatherResult.voiceResponseHindi
+                        voiceManager.speak(weatherResult.voiceResponseHindi, 0.98f)
+                        _agentStatus.value = AgentStatus.IDLE
+                        return
+                    }
                 }
-                repository.saveActivityContext(
-                    app = snapshot.packageName.ifBlank { "YouTube" },
-                    contentTitle = action.textToType.ifBlank { action.targetElementDesc }
+
+                // Memory Preference Learning
+                val extractedPref = MemoryManager.extractUserPreference(decision.cleanedCommand)
+                if (extractedPref != null) {
+                    repository.saveMemory(extractedPref.key, extractedPref.value, extractedPref.category, extractedPref.descriptionHindi)
+                    addLog("🧠 सीख लिया: ${extractedPref.key} = ${extractedPref.value}")
+                    _statusMessage.value = extractedPref.acknowledgementHindi
+                    voiceManager.speak(extractedPref.acknowledgementHindi, 0.98f)
+                    _agentStatus.value = AgentStatus.IDLE
+                    return
+                }
+
+                // Direct Conversational Reply via Gemini
+                val memories = repository.getAllMemoriesList()
+                val replyText = geminiClient.generateConversationalReply(decision.cleanedCommand, memories)
+
+                addLog("💬 उत्तर: $replyText")
+                _statusMessage.value = replyText
+                voiceManager.speak(replyText, 0.98f)
+
+                repository.logCommand(
+                    prompt = rawCommandText,
+                    app = "Max Conversation",
+                    actionType = "CONVERSATION_REPLY",
+                    actionDetails = replyText,
+                    responseHindi = replyText,
+                    success = true
                 )
 
-                // Automatic local optimization & cleanup
-                repository.pruneAndOptimizeMemory()
-
-                delay(1600)
-                if (_agentStatus.value == AgentStatus.SPEAKING || _agentStatus.value == AgentStatus.EXECUTING) {
-                    _agentStatus.value = AgentStatus.IDLE
-                    _statusMessage.value = "मैक्स तैयार है।"
-                }
-            } catch (e: Exception) {
-                Log.e("MaxViewModel", "Exception during command execution", e)
-                val failureMsg = "माफ़ कीजिये, कमांड पूरा करने में समस्या आई।"
                 _agentStatus.value = AgentStatus.IDLE
-                _statusMessage.value = "त्रुटि: ${e.message ?: "अज्ञात समस्या"}"
-                addLog("त्रुटि: ${e.localizedMessage ?: "अज्ञात समस्या"}")
-                voiceManager.speak(failureMsg, speechRate.value)
+                return
             }
+            else -> {
+                _agentStatus.value = AgentStatus.IDLE
+            }
+        }
+    }
+
+    private fun captureActiveScreenSnapshot(): ScreenSnapshot {
+        val realService = MaxAccessibilityService.instance
+        if (realService != null) {
+            val realSnapshot = realService.captureCurrentScreen()
+            if (realSnapshot.elements.isNotEmpty() || realSnapshot.packageName.isNotBlank()) {
+                return realSnapshot
+            }
+        }
+        return if (_useSimulatorMode.value) {
+            simulatorState.generateSnapshot()
+        } else {
+            ScreenSnapshot(packageName = "android", timestamp = System.currentTimeMillis())
         }
     }
 

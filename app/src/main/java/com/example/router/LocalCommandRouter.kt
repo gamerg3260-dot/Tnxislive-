@@ -199,10 +199,40 @@ class LocalCommandRouter(private val context: Context) {
     }
 
     /**
-     * GENERIC APP LAUNCH LOGIC:
-     * Discovers all installed apps dynamically from PackageManager and matches the spoken name
-     * using exact, alias, prefix, substring, token-overlap, and Levenshtein fuzzy matching.
+     * Directly launches an installed app by name/package.
      */
+    fun launchAppByName(appName: String, pkgName: String? = null): LocalExecutionResult.Handled {
+        val installedApps = GenericAppLauncher.getInstalledLaunchableApps(context)
+        val matchedApp = if (!pkgName.isNullOrBlank()) {
+            installedApps.find { it.packageName.equals(pkgName, ignoreCase = true) }
+        } else null ?: GenericAppLauncher.findBestAppMatch(appName, installedApps)
+
+        return if (matchedApp != null) {
+            val launched = GenericAppLauncher.launchApp(context, matchedApp)
+            if (launched) {
+                LocalExecutionResult.Handled(
+                    success = true,
+                    actionType = "OPEN_APP_LOCAL",
+                    messageHindi = "${matchedApp.appName} ऐप खोला गया (Package: ${matchedApp.packageName})।",
+                    voiceResponseHindi = "${matchedApp.appName} खोला जा रहा है।"
+                )
+            } else {
+                LocalExecutionResult.Handled(
+                    success = false,
+                    actionType = "OPEN_APP_LOCAL",
+                    messageHindi = "${matchedApp.appName} ऐप लॉन्च नहीं हो सका।",
+                    voiceResponseHindi = "माफ़ कीजिये, ${matchedApp.appName} लॉन्च नहीं हो सका।"
+                )
+            }
+        } else {
+            LocalExecutionResult.Handled(
+                success = false,
+                actionType = "OPEN_APP_NOT_FOUND",
+                messageHindi = "ऐप '$appName' इन्स्टॉल नहीं मिला।",
+                voiceResponseHindi = "मुझे '$appName' ऐप आपके फोन में नहीं मिला।"
+            )
+        }
+    }
     private fun handleGenericAppLaunch(parsed: ParsedCommand): LocalExecutionResult {
         val query = parsed.cleanedQuery
 
