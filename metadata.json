@@ -1,0 +1,6 @@
+{
+  "name": "Max",
+  "description": "AI Voice Assistant to control Android apps like a human with Hindi voice and Accessibility gestures",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
