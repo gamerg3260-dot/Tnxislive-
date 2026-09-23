@@ -73,6 +73,10 @@ import com.example.ui.viewmodel.MaxViewModel
 
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.OpenInNew
+import com.example.assistant.AssistantHelper
 import com.example.ui.components.VoiceEnrollmentDialog
 
 @Composable
@@ -91,6 +95,14 @@ fun SettingsScreen(
     val isVoiceEnrolled by enrollmentManager.isEnrolled.collectAsState()
     val isVoiceVerificationEnabled by enrollmentManager.isVerificationEnabled.collectAsState()
     var showVoiceEnrollmentDialog by remember { mutableStateOf(false) }
+
+    var isDefaultAssistant by remember { mutableStateOf(AssistantHelper.isMaxDefaultAssistant(context)) }
+
+    // Re-check assistant status when screen is viewed
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        isDefaultAssistant = AssistantHelper.isMaxDefaultAssistant(context)
+        onDispose { }
+    }
 
     var apiKeyInput by remember(customApiKey) { mutableStateOf(customApiKey) }
     var tempSpeechRate by remember(speechRate) { mutableFloatStateOf(speechRate) }
@@ -448,6 +460,124 @@ fun SettingsScreen(
                             Text("रीसेट", fontSize = 12.sp, color = Color(0xFFF43F5E))
                         }
                     }
+                }
+            }
+        }
+
+        // 3.8. Default Digital Assistant Role (Android System Assistant)
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaxSurfaceElevated),
+            border = CardDefaults.outlinedCardBorder().copy(
+                brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                    listOf(
+                        if (isDefaultAssistant) Color(0xFF10B981) else Color(0xFF8B5CF6),
+                        if (isDefaultAssistant) Color(0xFF00F5FF) else Color(0xFFEC4899)
+                    )
+                )
+            ),
+            modifier = Modifier.fillMaxWidth().testTag("default_assistant_card")
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = if (isDefaultAssistant) Icons.Default.CheckCircle else Icons.Default.AutoAwesome,
+                            contentDescription = "Default Assistant",
+                            tint = if (isDefaultAssistant) MaxSuccess else Color(0xFFA855F7),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "डिफ़ॉल्ट डिजिटल असिस्टेंट (Default Assistant)",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = if (isDefaultAssistant) "✅ मैक्स सिस्टम का डिफ़ॉल्ट असिस्टेंट है" else "⚠️ मैक्स डिफ़ॉल्ट असिस्टेंट सेट नहीं है",
+                                fontSize = 11.sp,
+                                color = if (isDefaultAssistant) MaxSuccess else Color(0xFF38BDF8)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "मैक्स को Android का डिफ़ॉल्ट डिजिटल असिस्टेंट सेट करें, ताकि Google Assistant की तरह:",
+                    fontSize = 12.sp,
+                    color = TextSecondary,
+                    lineHeight = 16.sp
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaxDarkBg.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = "• 🔘 होम बटन लॉन्ग-प्रेस (3-Button Nav)",
+                        fontSize = 12.sp,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = "• 📱 स्क्रीन के कोने से स्वाइप जेस्चर (Gesture Nav)",
+                        fontSize = 12.sp,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = "• ⚡ तीनों तरीके साथ काम करेंगे: होम/जेस्चर + फ्लोटिंग वेव + 'Hey Max'",
+                        fontSize = 11.sp,
+                        color = Color(0xFF00F5FF)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = {
+                        AssistantHelper.openAssistantSettings(context)
+                        // Trigger check
+                        isDefaultAssistant = AssistantHelper.isMaxDefaultAssistant(context)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isDefaultAssistant) Color(0xFF1E293B) else Color(0xFF7C3AED)
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("open_assistant_settings_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.OpenInNew,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isDefaultAssistant) "असिस्टेंट सेटिंग्स बदलें (Change Assistant Settings)" else "डिफ़ॉल्ट असिस्टेंट सेट करें (Set as Default Assistant)",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
                 }
             }
         }

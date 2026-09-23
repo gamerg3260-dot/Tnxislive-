@@ -2,4 +2,6 @@
     <string name="app_name">Max</string>
     <string name="accessibility_service_label">Max AI Voice Agent</string>
     <string name="accessibility_service_description">Max uses Accessibility to read screen elements and execute human-like taps and gestures on your behalf upon your voice commands.</string>
+    <string name="assistant_service_label">Max Assistant</string>
+    <string name="assistant_service_description">Max provides full system voice assistant capabilities, answering voice commands on home long-press or gesture swipe.</string>
 </resources>

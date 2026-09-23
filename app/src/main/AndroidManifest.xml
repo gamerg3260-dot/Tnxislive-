@@ -94,6 +94,49 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- Official Android Default Digital Assistant Services -->
+        <service
+            android:name=".assistant.MaxVoiceInteractionService"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true"
+            android:label="@string/assistant_service_label">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction_service_config" />
+        </service>
+
+        <service
+            android:name=".assistant.MaxVoiceInteractionSessionService"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true" />
+
+        <service
+            android:name=".assistant.MaxRecognitionService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+
+        <!-- Trampoline Assist Activity for Intent-based launcher assist actions -->
+        <activity
+            android:name=".assistant.AssistantActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:finishOnCloseSystemDialogs="true"
+            android:launchMode="singleInstance">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <action android:name="android.intent.action.VOICE_ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <!-- Floating Mic & Assistant Overlay Widget over other apps -->
         <service
             android:name=".overlay.MaxOverlayService"
