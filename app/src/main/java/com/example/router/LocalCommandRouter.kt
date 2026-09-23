@@ -22,21 +22,24 @@ class LocalCommandRouter(private val context: Context) {
     private val tag = "LocalCommandRouter"
     val toggleController = SystemToggleController(context)
 
-    suspend fun tryRouteLocally(rawCommand: String): LocalExecutionResult {
-        val query = rawCommand.trim().lowercase()
+    suspend fun tryRouteLocally(rawCommand: String, preParsed: ParsedCommand? = null): LocalExecutionResult {
+        val parsed = preParsed ?: CommandParser.parse(rawCommand)
+        val query = parsed.cleanedQuery
+
+        Log.d(tag, "[Router] Raw: '$rawCommand' ➔ Clean: '$query' | Intent: ${parsed.intent} | Target: '${parsed.targetEntity}'")
 
         // 0. Identity & Creator Recognition (Ganesh Sahani)
-        if (isIdentityOrCreatorCommand(query)) {
+        if (parsed.intent == ParsedIntent.IDENTITY_QUERY || isIdentityOrCreatorCommand(query)) {
             return handleIdentityAndCreator(query)
         }
 
         // 0B. Phone Screen Lock via Device Admin ("phone lock karo", "Max lock kar do", "lock phone", "screen lock karo")
-        if (isPhoneLockCommand(query)) {
+        if (parsed.intent == ParsedIntent.LOCK_PHONE || isPhoneLockCommand(query)) {
             return handlePhoneLock()
         }
 
         // 0C. Dedicated Emergency Theft Siren ("chori alarm bajao", "siren bajao", "alarm band karo", "stop siren")
-        if (isTheftAlarmStartCommand(query)) {
+        if (parsed.intent == ParsedIntent.THEFT_ALARM || isTheftAlarmStartCommand(query)) {
             return handleTheftAlarmStart()
         }
         if (isTheftAlarmStopCommand(query)) {
@@ -55,23 +58,23 @@ class LocalCommandRouter(private val context: Context) {
         }
 
         // 2. Navigation & Global Keys (Home, Back, Recent Apps)
-        if (isSystemNavigationCommand(query)) {
+        if (parsed.intent == ParsedIntent.SYSTEM_NAV || isSystemNavigationCommand(query)) {
             return handleSystemNavigation(query)
         }
 
         // 3. Local Scrolling (Scroll down / Scroll up / Neeche / Upar)
-        if (isScrollCommand(query)) {
+        if (parsed.intent == ParsedIntent.SCROLL || isScrollCommand(query)) {
             return handleScroll(query)
         }
 
         // 4. GENERIC APP LAUNCHER (Dynamic PackageManager + Fuzzy Matching for ANY installed app)
-        val appLaunchResult = handleGenericAppLaunch(query)
+        val appLaunchResult = handleGenericAppLaunch(parsed)
         if (appLaunchResult is LocalExecutionResult.Handled) {
             return appLaunchResult
         }
 
         // 5. Camera Direct Launch
-        if (isCameraCommand(query)) {
+        if (parsed.intent == ParsedIntent.CAMERA_SELFIE || isCameraCommand(query)) {
             return handleCameraLaunch()
         }
 
@@ -200,66 +203,41 @@ class LocalCommandRouter(private val context: Context) {
      * Discovers all installed apps dynamically from PackageManager and matches the spoken name
      * using exact, alias, prefix, substring, token-overlap, and Levenshtein fuzzy matching.
      */
-    private fun handleGenericAppLaunch(query: String): LocalExecutionResult {
-        // App launch trigger words in Hindi / English / Hinglish
-        val openPrefixes = listOf(
-            "open ", "kholo ", "launch ", "start ", "chalao ", "chala do ", "khol do ",
-            "kholiye ", "kholna ", "ओपन ", "खोलो ", "चलाओ ", "लॉन्च ", "शुरू करो ", "चालू करो "
-        )
-        val openSuffixes = listOf(
-            " kholo", " khol do", " kholiye", " chalao", " chala do", " open karo", " open kar do",
-            " open", " app open karo", " app kholo", " application kholo", " app", " application",
-            " खोलो", " खोल दो", " खोलिए", " चलाओ", " चला दो", " ओपन करो", " ऐप खोलो", " चालू करो", " लॉन्च करो"
-        )
+    private fun handleGenericAppLaunch(parsed: ParsedCommand): LocalExecutionResult {
+        val query = parsed.cleanedQuery
 
-        val hasOpenVerb = openPrefixes.any { query.startsWith(it) } ||
-                openSuffixes.any { query.contains(it) }
+        if (parsed.intent != ParsedIntent.OPEN_APP) {
+            val openPrefixes = listOf(
+                "open ", "kholo ", "launch ", "start ", "chalao ", "chala do ", "khol do ",
+                "kholiye ", "kholna ", "ओपन ", "खोलो ", "चलाओ ", "लॉन्च ", "शुरू करो ", "चालू करो "
+            )
+            val openSuffixes = listOf(
+                " kholo", " khol do", " kholiye", " chalao", " chala do", " open karo", " open kar do",
+                " open", " app open karo", " app kholo", " application kholo", " app", " application",
+                " खोलो", " खोल दो", " खोलिए", " चलाओ", " चला दो", " ओपन करो", " ऐप खोलो", " चालू करो", " लॉन्च करो"
+            )
 
-        // Also check if the entire query is a standalone well-known app name or alias (e.g. "facebook", "whatsapp", "yt")
-        val isDirectAppName = query.split(" ").size <= 2 && (
-            query in listOf("facebook", "fb", "instagram", "insta", "whatsapp", "wa", "youtube", "yt", "chrome", "spotify", "gmail", "maps", "camera", "gallery", "settings", "calculator", "clock") ||
-            query in listOf("फेसबुक", "इंस्टाग्राम", "व्हाट्सएप", "यूट्यूब", "क्रोम", "कैमरा", "गैलरी", "सेटिंग्स")
-        )
+            val hasOpenVerb = openPrefixes.any { query.startsWith(it) } || openSuffixes.any { query.contains(it) }
+            val isDirectAppName = query.split(" ").size <= 2 && (
+                query in listOf("facebook", "fb", "instagram", "insta", "whatsapp", "wa", "youtube", "yt", "chrome", "spotify", "gmail", "maps", "camera", "gallery", "settings", "calculator", "clock") ||
+                query in listOf("फेसबुक", "इंस्टाग्राम", "व्हाट्सएप", "यूट्यूब", "क्रोम", "कैमरा", "गैलरी", "सेटिंग्स")
+            )
 
-        if (!hasOpenVerb && !isDirectAppName) return LocalExecutionResult.NotHandled
-
-        // Do not intercept if it's an in-app control command like "search CarryMinati", "tap on this", "scroll down"
-        val hasComplexInAppTask = query.contains("search") || query.contains("सर्च") ||
-                query.contains("tap") || query.contains("टैप") || query.contains("scroll") ||
-                query.contains("video play") || query.contains("गाना चलाओ") || query.contains("skip") ||
-                query.contains("message bhejo") || query.contains("call lagao")
-
-        if (hasComplexInAppTask) {
-            val words = query.split(" ").filter { it.isNotBlank() }
-            if (words.size > 3) {
-                return LocalExecutionResult.NotHandled
-            }
+            if (!hasOpenVerb && !isDirectAppName) return LocalExecutionResult.NotHandled
         }
 
-        // Extract app name candidate by removing verb words
-        var candidate = query
-        val wordsToRemove = listOf(
-            "open", "kholo", "khol do", "kholiye", "kholna", "खोलो", "खोल दो", "खोलिए",
-            "launch", "start", "chalao", "chala do", "चलाओ", "चला दो", "चालू करो", "लॉन्च",
-            "app", "application", "apk", "ऐप", "ko", "को", "par", "पर", "karo", "kar do", "करो", "कर दो",
-            "please", "zara", "jara", "जरा", "ओपन", "ओपन करो"
-        )
-        for (w in wordsToRemove) {
-            candidate = candidate.replace(Regex("\\b$w\\b", RegexOption.IGNORE_CASE), "")
-        }
-        val cleanAppName = candidate.trim().ifBlank { query.trim() }
-
-        if (cleanAppName.isBlank()) return LocalExecutionResult.NotHandled
+        val cleanTarget = parsed.targetEntity.ifBlank { query }
+        if (cleanTarget.isBlank()) return LocalExecutionResult.NotHandled
 
         // Query all installed apps from device
         val installedApps = GenericAppLauncher.getInstalledLaunchableApps(context)
-        Log.d(tag, "[AppLaunchRouter] Extracted candidate: '$cleanAppName' from query: '$query'. Installed apps count: ${installedApps.size}")
+        Log.d(tag, "[AppLaunchRouter] Target candidate: '$cleanTarget' (Raw query: '${parsed.rawQuery}'). Installed apps count: ${installedApps.size}")
 
         // Perform multi-tier fuzzy match
-        val matchedApp = GenericAppLauncher.findBestAppMatch(cleanAppName, installedApps)
+        val matchedApp = GenericAppLauncher.findBestAppMatch(cleanTarget, installedApps)
 
         return if (matchedApp != null) {
-            Log.i(tag, "[AppLaunchRouter] Match SUCCESS: '$cleanAppName' -> '${matchedApp.appName}' (${matchedApp.packageName})")
+            Log.i(tag, "[AppLaunchRouter] Match SUCCESS: '$cleanTarget' -> '${matchedApp.appName}' (${matchedApp.packageName})")
             val launched = GenericAppLauncher.launchApp(context, matchedApp)
             if (launched) {
                 LocalExecutionResult.Handled(
@@ -278,15 +256,15 @@ class LocalCommandRouter(private val context: Context) {
             }
         } else {
             // App was not found in installed apps list — NEVER fail silently!
-            Log.w(tag, "[AppLaunchRouter] Match FAILED for '$cleanAppName'. Total installed apps searched: ${installedApps.size}")
+            Log.w(tag, "[AppLaunchRouter] Match FAILED for '$cleanTarget'. Total installed apps searched: ${installedApps.size}")
             val suggestions = installedApps.take(3).joinToString(", ") { it.appName }
             val suggestionStr = if (suggestions.isNotBlank()) " आपके फोन में $suggestions जैसे ऐप्स उपलब्ध हैं।" else ""
 
             LocalExecutionResult.Handled(
                 success = false,
                 actionType = "OPEN_APP_NOT_FOUND",
-                messageHindi = "ऐप '$cleanAppName' डिवाइस पर इन्स्टॉल नहीं मिला (कुल ऐप्स: ${installedApps.size})।",
-                voiceResponseHindi = "मुझे '$cleanAppName' ऐप आपके फोन में नहीं मिला।$suggestionStr"
+                messageHindi = "ऐप '$cleanTarget' डिवाइस पर इन्स्टॉल नहीं मिला (कुल ऐप्स: ${installedApps.size})।",
+                voiceResponseHindi = "मुझे '$cleanTarget' ऐप आपके फोन में नहीं मिला।$suggestionStr"
             )
         }
     }

@@ -27,6 +27,9 @@ import com.example.router.LocalExecutionResult
 import com.example.router.IntentClassifier
 import com.example.router.InputCategory
 import com.example.router.IntentClassificationResult
+import com.example.router.CommandParser
+import com.example.router.ParsedCommand
+import com.example.router.ParsedIntent
 import com.example.voice.MaxVoiceManager
 import com.example.camera.MaxCameraManager
 import com.example.camera.CameraCaptureResult
@@ -394,7 +397,14 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             // =========================================================================
-            // STEP 0: INCOMING CALL VOICE CONTROL (Priority 1: उठा लो / काट दो / मैक्स तुम बात करो)
+            // STEP 0A: INTENT & ENTITY EXTRACTION (CommandParser)
+            // =========================================================================
+            var parsedCommand = CommandParser.parse(commandText)
+            val addressLog = if (parsedCommand.extractedAddress != null) " (संबोधन: '${parsedCommand.extractedAddress}')" else ""
+            addLog("[PARSER] इनपुट: '$commandText'$addressLog ➔ फिल्टर: '${parsedCommand.cleanedQuery}' | Intent: ${parsedCommand.intent} | Entity: '${parsedCommand.targetEntity}'")
+
+            // =========================================================================
+            // STEP 0B: INCOMING CALL VOICE CONTROL (Priority 1: उठा लो / काट दो / मैक्स तुम बात करो)
             // =========================================================================
             if (callControlManager.currentCall.value?.status == CallStatus.RINGING) {
                 addLog("[वर्गीकरण: टास्क (TASK)] 📞 इनकमिंग कॉल बज रही है: वॉयस कमांड का मिलान किया जा रहा है...")
@@ -419,7 +429,20 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
             // =========================================================================
             // STEP 1: LOCAL COMMAND ROUTER FIRST (Offline, Zero Latency, App Launch, System Toggles, Navigation, Lock)
             // =========================================================================
-            val localResult = localCommandRouter.tryRouteLocally(commandText)
+            var localResult = localCommandRouter.tryRouteLocally(commandText, parsedCommand)
+
+            // Ambiguity Fallback: If local route failed and parser confidence is low, ask Gemini for structured JSON classification
+            if (localResult !is LocalExecutionResult.Handled && (parsedCommand.intent == ParsedIntent.UNKNOWN || parsedCommand.confidence < 0.6f)) {
+                addLog("🤔 लोकल पार्सिंग अस्पष्ट है: जेमिनी से स्ट्रक्चर्ड JSON इंटेंट/एंटीटी विश्लेषण मांगा जा रहा है...")
+                val geminiParsed = geminiClient.parseCommandViaGemini(commandText)
+                if (geminiParsed.intent != ParsedIntent.UNKNOWN && geminiParsed.targetEntity.isNotBlank()) {
+                    parsedCommand = geminiParsed
+                    addLog("[GEMINI PARSER] जेमिनी निष्कर्ष: Intent = ${parsedCommand.intent}, Target = '${parsedCommand.targetEntity}'")
+                    // Retry local router with Gemini structured parse
+                    localResult = localCommandRouter.tryRouteLocally(commandText, parsedCommand)
+                }
+            }
+
             if (localResult is LocalExecutionResult.Handled) {
                 addLog("[वर्गीकरण: टास्क (TASK)] ⚡ लोकल निष्पादन: ${localResult.actionType} (Gemini API बाईपास)")
                 _agentStatus.value = AgentStatus.EXECUTING

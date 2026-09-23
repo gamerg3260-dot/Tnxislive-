@@ -9,6 +9,9 @@ import com.example.data.model.ActionType
 import com.example.data.model.AssistantAction
 import com.example.data.model.ScreenNode
 import com.example.data.model.ScreenSnapshot
+import com.example.router.CommandParser
+import com.example.router.ParsedCommand
+import com.example.router.ParsedIntent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -476,6 +479,104 @@ class GeminiClient(
             Log.e(tag, "Failed to analyze image with vision", e)
             return@withContext "कैमरे के दृश्य को समझने में त्रुटि हुई।"
         }
+    }
+
+    /**
+     * Structure & extract intent/entity via Gemini when local parsing is ambiguous.
+     * Returns structured JSON: {"action": "open_app" | "toggle" | "conversation", "target": "youtube", "cleaned_query": "youtube kholo"}
+     */
+    suspend fun parseCommandViaGemini(rawCommand: String): ParsedCommand = withContext(Dispatchers.IO) {
+        val apiKey = getApiKey()
+        if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
+            return@withContext CommandParser.parse(rawCommand)
+        }
+
+        try {
+            val systemPrompt = """
+                You are an Intent & Entity Extractor for Android assistant 'Max'.
+                Given user voice query, strip filler greetings ("Hello Max", "Hey", "Suno", "Max"), identify the true action and target entity.
+                Return strictly JSON without markdown quotes:
+                {
+                  "action": "open_app" | "toggle" | "navigation" | "scroll" | "lock" | "camera" | "conversation",
+                  "target": "target app name or entity in English e.g. YouTube, WhatsApp, WiFi",
+                  "cleaned_query": "cleaned sentence without wake words"
+                }
+            """.trimIndent()
+
+            val requestJson = JSONObject().apply {
+                put("contents", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().apply { put("text", "Parse command: '$rawCommand'") })
+                        })
+                    })
+                })
+                put("systemInstruction", JSONObject().apply {
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().apply { put("text", systemPrompt) })
+                    })
+                })
+                put("generationConfig", JSONObject().apply {
+                    put("temperature", 0.0)
+                    put("maxOutputTokens", 100)
+                })
+            }
+
+            val requestBodyString = requestJson.toString()
+            val request = Request.Builder()
+                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
+                .post(requestBodyString.toRequestBody(jsonMediaType))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (response.isSuccessful) {
+                val rootJson = JSONObject(responseBody)
+                val candidates = rootJson.optJSONArray("candidates")
+                val textOutput = candidates?.optJSONObject(0)
+                    ?.optJSONObject("content")
+                    ?.optJSONArray("parts")
+                    ?.optJSONObject(0)
+                    ?.optString("text")?.trim() ?: ""
+
+                val cleanedText = textOutput.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                val parsedJson = JSONObject(cleanedText)
+
+                val actionStr = parsedJson.optString("action", "unknown").lowercase()
+                val targetStr = parsedJson.optString("target", "").trim()
+                val cleanedQuery = parsedJson.optString("cleaned_query", rawCommand).trim()
+
+                val mappedIntent = when (actionStr) {
+                    "open_app" -> ParsedIntent.OPEN_APP
+                    "toggle" -> ParsedIntent.TOGGLE_SETTING
+                    "navigation" -> ParsedIntent.SYSTEM_NAV
+                    "scroll" -> ParsedIntent.SCROLL
+                    "lock" -> ParsedIntent.LOCK_PHONE
+                    "camera" -> ParsedIntent.CAMERA_SELFIE
+                    "conversation" -> ParsedIntent.CONVERSATION
+                    else -> ParsedIntent.UNKNOWN
+                }
+
+                Log.i(tag, "Gemini Structured Parser Success: Raw='$rawCommand' ➔ Action='$actionStr', Target='$targetStr'")
+
+                return@withContext ParsedCommand(
+                    rawQuery = rawCommand,
+                    cleanedQuery = cleanedQuery,
+                    extractedAddress = "gemini_extracted",
+                    intent = mappedIntent,
+                    targetEntity = targetStr,
+                    actionVerb = actionStr,
+                    confidence = 0.95f,
+                    isLocalAction = mappedIntent != ParsedIntent.CONVERSATION && mappedIntent != ParsedIntent.UNKNOWN
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Gemini command parsing fallback error: ${e.message}")
+        }
+
+        return@withContext CommandParser.parse(rawCommand)
     }
 
     private fun parseGeminiJson(jsonStr: String): AssistantAction {
