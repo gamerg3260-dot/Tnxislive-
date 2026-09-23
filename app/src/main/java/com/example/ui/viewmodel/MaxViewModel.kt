@@ -397,7 +397,7 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
             // STEP 0: INCOMING CALL VOICE CONTROL (Priority 1: उठा लो / काट दो / मैक्स तुम बात करो)
             // =========================================================================
             if (callControlManager.currentCall.value?.status == CallStatus.RINGING) {
-                addLog("📞 इनकमिंग कॉल बज रही है: वॉयस कमांड का मिलान किया जा रहा है...")
+                addLog("[वर्गीकरण: टास्क (TASK)] 📞 इनकमिंग कॉल बज रही है: वॉयस कमांड का मिलान किया जा रहा है...")
                 val callHandled = callControlManager.tryHandleCallVoiceCommand(commandText)
                 if (callHandled) {
                     repository.logCommand(
@@ -417,32 +417,46 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
             _statusMessage.value = "कमांड का विश्लेषण हो रहा है..."
 
             // =========================================================================
-            // STEP 0: EXPLICIT USER PREFERENCE / HABIT LEARNING ("Mujhe Hindi gaane pasand hain")
+            // STEP 1: LOCAL COMMAND ROUTER FIRST (Offline, Zero Latency, App Launch, System Toggles, Navigation, Lock)
             // =========================================================================
-            val extractedPref = MemoryManager.extractUserPreference(commandText)
-            if (extractedPref != null) {
-                addLog("स्थानीय मेमोरी: यूजर की नई पसंद सीखी गई -> ${extractedPref.key}: ${extractedPref.value}")
-                repository.saveMemory(
-                    key = extractedPref.key,
-                    value = extractedPref.value,
-                    category = extractedPref.category,
-                    descHindi = extractedPref.descriptionHindi
-                )
+            val localResult = localCommandRouter.tryRouteLocally(commandText)
+            if (localResult is LocalExecutionResult.Handled) {
+                addLog("[वर्गीकरण: टास्क (TASK)] ⚡ लोकल निष्पादन: ${localResult.actionType} (Gemini API बाईपास)")
+                _agentStatus.value = AgentStatus.EXECUTING
+                _statusMessage.value = localResult.messageHindi
+
+                // Also update simulator if app was opened and user is in simulator mode
+                if (commandText.contains("youtube", ignoreCase = true) || commandText.contains("यूट्यूब", ignoreCase = true)) {
+                    simulatorState.clearTapIndicator()
+                }
+
+                // Log to Room Database
                 repository.logCommand(
                     prompt = commandText,
-                    app = "Max Local Memory",
-                    actionType = "LEARN_PREFERENCE",
-                    actionDetails = "${extractedPref.key} = ${extractedPref.value}",
-                    responseHindi = extractedPref.acknowledgementHindi,
-                    success = true
+                    app = "System / Local",
+                    actionType = localResult.actionType,
+                    actionDetails = "Executed immediately offline via LocalCommandRouter",
+                    responseHindi = localResult.voiceResponseHindi,
+                    success = localResult.success
                 )
 
-                // Background auto-optimization
+                // Update activity context & auto-prune
+                repository.saveActivityContext("System", localResult.actionType)
                 repository.pruneAndOptimizeMemory()
 
+                // Speak voice confirmation
                 _agentStatus.value = AgentStatus.SPEAKING
-                _statusMessage.value = extractedPref.acknowledgementHindi
-                voiceManager.speak(extractedPref.acknowledgementHindi, speechRate.value)
+                _statusMessage.value = localResult.voiceResponseHindi
+                voiceManager.speak(localResult.voiceResponseHindi, speechRate.value)
+
+                // Special handling for Phone Lock: TTS starts speaking first, then lockNow() locks screen
+                if (localResult.actionType == "LOCK_PHONE") {
+                    addLog("🔒 डिवाइस एडमिन: फोन तुरंत लॉक किया जा रहा है...")
+                    delay(450)
+                    antiTheftManager.lockDeviceNow()
+                    _agentStatus.value = AgentStatus.IDLE
+                    return@launch
+                }
 
                 delay(1800)
                 if (_agentStatus.value == AgentStatus.SPEAKING) {
@@ -453,59 +467,10 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // =========================================================================
-            // STEP 0C: SMART INTENT CLASSIFICATION (Task/Hardware Command vs Conversation/Q&A)
-            // =========================================================================
-            var classification = intentClassifier.classify(commandText)
-            if (classification.category == InputCategory.AMBIGUOUS) {
-                // Micro-check with Gemini Flash if heuristics are ambiguous
-                val geminiDecision = geminiClient.classifyIntentViaGemini(commandText)
-                classification = if (geminiDecision == "CONVERSATION") {
-                    IntentClassificationResult(InputCategory.CONVERSATION_CHAT, 0.9f, "AI वार्तालाप वर्गीकरण (Gemini Flash)")
-                } else {
-                    IntentClassificationResult(InputCategory.TASK_COMMAND, 0.9f, "AI टास्क वर्गीकरण (Gemini Flash)")
-                }
-            }
-
-            // -------------------------------------------------------------------------
-            // IF CONVERSATION / QUESTION: ANSWER DIRECTLY WITH NATURAL HINDI (NO DEVICE ACTIONS)
-            // -------------------------------------------------------------------------
-            if (classification.category == InputCategory.CONVERSATION_CHAT) {
-                addLog("💬 बातचीत / सवाल पहचाना गया (${classification.reason}): जेमिनी से उत्तर प्राप्त किया जा रहा है...")
-                _agentStatus.value = AgentStatus.THINKING
-                _statusMessage.value = "सोच रहा हूँ..."
-
-                val memories = repository.allMemories.first()
-                val replyText = geminiClient.generateConversationalReply(commandText, memories)
-
-                addLog("मैक्स उत्तर: $replyText")
-                repository.logCommand(
-                    prompt = commandText,
-                    app = "Max Conversation / Gemini",
-                    actionType = "CONVERSATION_REPLY",
-                    actionDetails = "Answered naturally in Hindi without triggering device actions",
-                    responseHindi = replyText,
-                    success = true
-                )
-
-                _agentStatus.value = AgentStatus.SPEAKING
-                _statusMessage.value = replyText
-                voiceManager.speak(replyText, speechRate.value)
-
-                delay(3000)
-                if (_agentStatus.value == AgentStatus.SPEAKING) {
-                    _agentStatus.value = AgentStatus.IDLE
-                    _statusMessage.value = "मैक्स तैयार है।"
-                }
-                return@launch
-            }
-
-            addLog("⚡ कार्य/टास्क कमांड: लोकल-फर्स्ट निष्पादन पाइपलाइन शुरू...")
-
-            // =========================================================================
-            // STEP 1A: OFFLINE REMINDERS & ALARMS (AlarmManager + Room Database)
+            // STEP 2: OFFLINE REMINDERS & ALARMS (AlarmManager + Room Database)
             // =========================================================================
             if (reminderManager.isReminderOrAlarmCommand(commandText)) {
-                addLog("⏰ रिमाइंडर/अलार्म कमांड पहचानी गई: ऑफलाइन AlarmManager और Room DB में प्रोसेस हो रहा है...")
+                addLog("[वर्गीकरण: टास्क (TASK)] ⏰ रिमाइंडर/अलार्म कमांड: ऑफलाइन AlarmManager में प्रोसेस हो रहा है...")
                 _agentStatus.value = AgentStatus.EXECUTING
                 _statusMessage.value = "रिमाइंडर प्रोसेस हो रहा है..."
 
@@ -540,10 +505,10 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // =========================================================================
-            // STEP 1B: LIVE WEATHER FORECAST (Open-Meteo Free API + FusedLocation)
+            // STEP 3: LIVE WEATHER FORECAST (Open-Meteo Free API + FusedLocation)
             // =========================================================================
             if (weatherManager.isWeatherCommand(commandText)) {
-                addLog("🌤 मौसम कमांड पहचानी गई: FusedLocation + Open-Meteo API से डेटा लाया जा रहा है...")
+                addLog("[वर्गीकरण: टास्क (TASK)] 🌤 मौसम कमांड: FusedLocation + Open-Meteo API से डेटा लाया जा रहा है...")
                 _agentStatus.value = AgentStatus.EXECUTING
                 _isFetchingWeather.value = true
                 _statusMessage.value = "वर्तमान स्थान का मौसम प्राप्त हो रहा है..."
@@ -587,9 +552,10 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // =========================================================================
-            // STEP 1C: CAMERA, SELFIE & SCENE ANALYSIS (CameraX + MediaStore + Gemini Vision)
+            // STEP 4: CAMERA, SELFIE & SCENE ANALYSIS (CameraX + MediaStore + Gemini Vision)
             // =========================================================================
             if (cameraManager.isCameraCommand(commandText)) {
+                addLog("[वर्गीकरण: टास्क (TASK)] 📷 कैमरा/सेल्फी कमांड...")
                 if (!cameraManager.hasCameraPermission()) {
                     val permMsg = "कैमरा की अनुमति (Camera Permission) नहीं है। कृपया पहले सेटिंग्स में अनुमति दें।"
                     addLog("चेतावनी: कैमरा परमिशन उपलब्ध नहीं है।")
@@ -636,7 +602,7 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
 
                         _agentStatus.value = AgentStatus.SPEAKING
                         _statusMessage.value = visionExplanation
-                        voiceManager.speak(visionExplanation, 1.08f)
+                        voiceManager.speak(visionExplanation, 1.0f)
 
                         delay(3500)
                         if (_agentStatus.value == AgentStatus.SPEAKING) {
@@ -649,7 +615,7 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
                         _agentStatus.value = AgentStatus.IDLE
                         _statusMessage.value = errorMsg
                         addLog("त्रुटि: ${captureRes.exceptionOrNull()?.localizedMessage}")
-                        voiceManager.speak(errorMsg, 1.08f)
+                        voiceManager.speak(errorMsg, 1.0f)
                     }
                     return@launch
                 }
@@ -692,7 +658,7 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
                         _statusMessage.value = "मैक्स तैयार है।"
                     }
                 } else {
-                    val errorMsg = "फोटो खींचने में समस्या आई。"
+                    val errorMsg = "फोटो खींचने में समस्या आई।"
                     _agentStatus.value = AgentStatus.IDLE
                     _statusMessage.value = errorMsg
                     voiceManager.speak(errorMsg, speechRate.value)
@@ -701,57 +667,41 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // =========================================================================
-            // STEP 1D: ANTI-THEFT VOICE COMMANDS & EMERGENCY CONTACT SETUP
+            // STEP 5: ANTI-THEFT VOICE COMMANDS & EMERGENCY CONTACT SETUP
             // =========================================================================
             val lowerCommand = commandText.lowercase()
             if (isAntiTheftVoiceCommand(lowerCommand)) {
+                addLog("[वर्गीकरण: टास्क (TASK)] 🛡 एंटी-थेफ्ट कमांड...")
                 handleAntiTheftVoiceCommand(commandText, lowerCommand)
                 return@launch
             }
 
             // =========================================================================
-            // STEP 1: LOCAL COMMAND ROUTER (Offline, Zero Latency, No Gemini API)
+            // STEP 6: EXPLICIT USER PREFERENCE / HABIT LEARNING ("Mujhe Hindi gaane pasand hain")
             // =========================================================================
-            addLog("लोकल राउटर: जांच रहे हैं क्या यह सिंपल/हार्डवेयर कमांड है...")
-            val localResult = localCommandRouter.tryRouteLocally(commandText)
-
-            if (localResult is LocalExecutionResult.Handled) {
-                addLog("लोकल एक्शन मैच: ${localResult.actionType} (Gemini API बाईपास किया गया)")
-                _agentStatus.value = AgentStatus.EXECUTING
-                _statusMessage.value = localResult.messageHindi
-
-                // Also update simulator if app was opened and user is in simulator mode
-                if (commandText.contains("youtube", ignoreCase = true) || commandText.contains("यूट्यूब", ignoreCase = true)) {
-                    simulatorState.clearTapIndicator()
-                }
-
-                // Log to Room Database
+            val extractedPref = MemoryManager.extractUserPreference(commandText)
+            if (extractedPref != null) {
+                addLog("[वर्गीकरण: मेमोरी (MEMORY)] स्थानीय मेमोरी: यूजर की नई पसंद सीखी गई -> ${extractedPref.key}: ${extractedPref.value}")
+                repository.saveMemory(
+                    key = extractedPref.key,
+                    value = extractedPref.value,
+                    category = extractedPref.category,
+                    descHindi = extractedPref.descriptionHindi
+                )
                 repository.logCommand(
                     prompt = commandText,
-                    app = "System / Local",
-                    actionType = localResult.actionType,
-                    actionDetails = "Executed immediately offline via LocalCommandRouter",
-                    responseHindi = localResult.voiceResponseHindi,
-                    success = localResult.success
+                    app = "Max Local Memory",
+                    actionType = "LEARN_PREFERENCE",
+                    actionDetails = "${extractedPref.key} = ${extractedPref.value}",
+                    responseHindi = extractedPref.acknowledgementHindi,
+                    success = true
                 )
 
-                // Update activity context & auto-prune
-                repository.saveActivityContext("System", localResult.actionType)
                 repository.pruneAndOptimizeMemory()
 
-                // Speak voice confirmation
                 _agentStatus.value = AgentStatus.SPEAKING
-                _statusMessage.value = localResult.voiceResponseHindi
-                voiceManager.speak(localResult.voiceResponseHindi, speechRate.value)
-
-                // Special handling for Phone Lock: TTS starts speaking first, then lockNow() locks screen
-                if (localResult.actionType == "LOCK_PHONE") {
-                    addLog("🔒 डिवाइस एडमिन: फोन तुरंत लॉक किया जा रहा है...")
-                    delay(450)
-                    antiTheftManager.lockDeviceNow()
-                    _agentStatus.value = AgentStatus.IDLE
-                    return@launch
-                }
+                _statusMessage.value = extractedPref.acknowledgementHindi
+                voiceManager.speak(extractedPref.acknowledgementHindi, speechRate.value)
 
                 delay(1800)
                 if (_agentStatus.value == AgentStatus.SPEAKING) {
@@ -762,7 +712,48 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // =========================================================================
-            // STEP 2: COMPLEX COMMAND WITH CONTEXT & MEMORY REASONING
+            // STEP 7: SMART INTENT CLASSIFICATION (Conversation vs Complex In-App Automation)
+            // =========================================================================
+            val classification = intentClassifier.classify(commandText)
+            val isConversation = classification.category == InputCategory.CONVERSATION_CHAT
+
+            addLog("[वर्गीकरण: ${if (isConversation) "बातचीत (CONVERSATION)" else "टास्क (TASK)"}] ${classification.reason}")
+
+            // -------------------------------------------------------------------------
+            // IF CONVERSATION / QUESTION: ANSWER DIRECTLY WITH NATURAL HINDI (NO DEVICE ACTIONS)
+            // -------------------------------------------------------------------------
+            if (isConversation) {
+                addLog("💬 बातचीत / सवाल: जेमिनी से उत्तर प्राप्त किया जा रहा है...")
+                _agentStatus.value = AgentStatus.THINKING
+                _statusMessage.value = "सोच रहा हूँ..."
+
+                val memories = repository.allMemories.first()
+                val replyText = geminiClient.generateConversationalReply(commandText, memories)
+
+                addLog("मैक्स उत्तर: $replyText")
+                repository.logCommand(
+                    prompt = commandText,
+                    app = "Max Conversation / Gemini",
+                    actionType = "CONVERSATION_REPLY",
+                    actionDetails = "Answered naturally in Hindi without triggering device actions",
+                    responseHindi = replyText,
+                    success = true
+                )
+
+                _agentStatus.value = AgentStatus.SPEAKING
+                _statusMessage.value = replyText
+                voiceManager.speak(replyText, speechRate.value)
+
+                delay(3000)
+                if (_agentStatus.value == AgentStatus.SPEAKING) {
+                    _agentStatus.value = AgentStatus.IDLE
+                    _statusMessage.value = "मैक्स तैयार है।"
+                }
+                return@launch
+            }
+
+            // =========================================================================
+            // STEP 8: COMPLEX COMMAND WITH CONTEXT & MEMORY REASONING (Gemini Vision + Accessibility Tree)
             // =========================================================================
             addLog("जटिल/विजुअल कमांड: समानांतर (Parallel) डेटा और स्क्रीन फेच शुरू...")
             _statusMessage.value = "मैक्स सोच रहा है और स्क्रीन का विश्लेषण कर रहा है..."

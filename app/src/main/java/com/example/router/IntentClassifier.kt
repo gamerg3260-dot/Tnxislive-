@@ -140,6 +140,16 @@ class IntentClassifier {
     }
 
     private fun isActionCommand(query: String): Boolean {
+        // 0. Standalone App Names (e.g. "youtube", "whatsapp", "yt", "fb", "यूट्यूब")
+        val directAppNames = listOf(
+            "youtube", "yt", "whatsapp", "wa", "facebook", "fb", "instagram", "insta",
+            "chrome", "camera", "gallery", "settings", "calculator", "clock", "spotify", "gmail", "maps",
+            "यूट्यूब", "व्हाट्सएप", "फेसबुक", "इंस्टाग्राम", "क्रोम", "कैमरा", "गैलरी", "सेटिंग्स"
+        )
+        if (query in directAppNames || directAppNames.any { query.startsWith("$it ") || query.endsWith(" $it") }) {
+            return true
+        }
+
         // 1. Hardware Toggles & Settings
         if (query.contains("wifi") || query.contains("wi-fi") || query.contains("वाईफाई") || query.contains("वाई-फ़ाई") ||
             query.contains("bluetooth") || query.contains("ब्लूटूथ") ||
@@ -149,10 +159,10 @@ class IntentClassifier {
             query.contains("hotspot") || query.contains("हॉटस्पॉट") ||
             query.contains("volume") || query.contains("वॉल्यूम") || query.contains("आवाज") || query.contains("sound") ||
             query.contains("brightness") || query.contains("ब्राइटनेस") || query.contains("रोशनी") ||
-            query.contains("dnd") || query.contains("do not disturb") || query.contains("डीएनडी")
+            query.contains("dnd") || query.contains("do not disturb") || query.contains("डीएनडी") ||
+            query.contains("gps") || query.contains("location") || query.contains("लोकेशन")
         ) {
-            // If it contains action words like on, off, badhao, kam karo -> definite task
-            if (hasActionVerb(query)) return true
+            return true
         }
 
         // 2. Lock & Security
@@ -164,8 +174,9 @@ class IntentClassifier {
 
         // 3. App Launchers & Navigation
         if (query.contains("kholo") || query.contains("khol do") || query.contains("open") || query.contains("launch") ||
-            query.contains("chalao") || query.contains("play") || query.contains("bajao") ||
+            query.contains("chalao") || query.contains("play") || query.contains("bajao") || query.contains("खोलो") || query.contains("खोल दो") ||
             query.contains("scroll") || query.contains("स्क्रॉल") || query.contains("neeche karo") || query.contains("upar karo") ||
+            query.contains("neeche jao") || query.contains("upar jao") ||
             query.contains("back") || query.contains("बैक") || query.contains("home") || query.contains("होम") || query.contains("recent apps")
         ) {
             return true
@@ -174,21 +185,22 @@ class IntentClassifier {
         // 4. Camera & Selfie
         if (query.contains("selfie") || query.contains("सेल्फी") ||
             (query.contains("photo") || query.contains("फोटो") || query.contains("pic")) &&
-            (query.contains("kheencho") || query.contains("le lo") || query.contains("lo") || query.contains("click") || query.contains("take"))
+            (query.contains("kheencho") || query.contains("le lo") || query.contains("lo") || query.contains("click") || query.contains("take") || query.contains("खींचो"))
         ) {
             return true
         }
 
         // 5. Reminders & Alarms
         if (query.contains("reminder") || query.contains("रिमाइंडर") || query.contains("alarm") || query.contains("अलार्म") ||
-            query.contains("yaad dilana") || query.contains("yaad dilao") || query.contains("baje")
+            query.contains("yaad dilana") || query.contains("yaad dilao") || query.contains("baje") || query.contains("याद दिलाना")
         ) {
             return true
         }
 
         // 6. Calls & Dialing
         if (query.contains("call karo") || query.contains("call lagao") || query.contains("फोन मिलाओ") ||
-            query.contains("phone lagao") || query.contains("utha lo") || query.contains("kaat do") || query.contains("disconnect")
+            query.contains("phone lagao") || query.contains("utha lo") || query.contains("kaat do") || query.contains("disconnect") ||
+            query.contains("कॉल करो") || query.contains("कॉल लगाओ")
         ) {
             return true
         }
@@ -198,13 +210,13 @@ class IntentClassifier {
     }
 
     private fun hasActionVerb(query: String): Boolean {
-        return query.contains("on karo") || query.contains("on kar do") || query.contains("on kardo") || query.contains("chalu karo") || query.contains("chalu kar do") ||
-                query.contains("off karo") || query.contains("off kar do") || query.contains("off kardo") || query.contains("band karo") || query.contains("band kar do") ||
-                query.contains("badhao") || query.contains("badha do") || query.contains("kam karo") || query.contains("kam kar do") || query.contains("ghatao") ||
-                query.contains("lagao") || query.contains("laga do") || query.contains("hatao") || query.contains("hata do") ||
-                query.contains("bhejo") || query.contains("bhej do") || query.contains("set karo") || query.contains("set kar do") ||
+        return query.contains("on karo") || query.contains("on kar do") || query.contains("on kardo") || query.contains("chalu karo") || query.contains("chalu kar do") || query.contains("ऑन करो") || query.contains("चालू करो") ||
+                query.contains("off karo") || query.contains("off kar do") || query.contains("off kardo") || query.contains("band karo") || query.contains("band kar do") || query.contains("ऑफ करो") || query.contains("बंद करो") ||
+                query.contains("badhao") || query.contains("badha do") || query.contains("kam karo") || query.contains("kam kar do") || query.contains("ghatao") || query.contains("बढ़ाओ") || query.contains("कम करो") ||
+                query.contains("lagao") || query.contains("laga do") || query.contains("hatao") || query.contains("hata do") || query.contains("लगाओ") || query.contains("हटाओ") ||
+                query.contains("bhejo") || query.contains("bhej do") || query.contains("set karo") || query.contains("set kar do") || query.contains("भेजो") || query.contains("सेट करो") ||
                 query.contains("skip karo") || query.contains("skip kar do") || query.contains("tap karo") || query.contains("click karo") ||
-                query.contains("type karo") || query.contains("search karo") || query.contains("likho")
+                query.contains("type karo") || query.contains("search karo") || query.contains("likho") || query.contains("लिखो") || query.contains("सर्च करो")
     }
 
     private fun startsWithQuestionWord(query: String): Boolean {

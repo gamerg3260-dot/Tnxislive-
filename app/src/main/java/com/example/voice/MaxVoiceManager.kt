@@ -50,94 +50,33 @@ class MaxVoiceManager(
     }
 
     private fun initTts() {
-        val googleTtsPackage = "com.google.android.tts"
-
-        val onInitListener = TextToSpeech.OnInitListener { status ->
+        textToSpeech = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                setupNaturalTtsVoice()
+                val hindiLocale = Locale("hi", "IN")
+                val res = textToSpeech?.setLanguage(hindiLocale)
+                if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    textToSpeech?.language = Locale.getDefault()
+                }
+
+                textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {
+                        _isSpeaking.value = true
+                    }
+
+                    override fun onDone(utteranceId: String?) {
+                        _isSpeaking.value = false
+                    }
+
+                    override fun onError(utteranceId: String?) {
+                        _isSpeaking.value = false
+                    }
+                })
+                isTtsReady = true
+                Log.i(tag, "TTS initialized successfully.")
             } else {
-                Log.e(tag, "Failed to initialize TextToSpeech with primary engine. Attempting default fallback.")
-                if (textToSpeech == null || !isTtsReady) {
-                    textToSpeech = TextToSpeech(context) { fallbackStatus ->
-                        if (fallbackStatus == TextToSpeech.SUCCESS) {
-                            setupNaturalTtsVoice()
-                        }
-                    }
-                }
+                Log.e(tag, "TTS initialization failed with status: $status")
             }
         }
-
-        try {
-            textToSpeech = TextToSpeech(context, onInitListener, googleTtsPackage)
-        } catch (e: Exception) {
-            Log.w(tag, "Google TTS engine instantiation fallback: ${e.message}")
-            textToSpeech = TextToSpeech(context, onInitListener)
-        }
-    }
-
-    private fun setupNaturalTtsVoice() {
-        val hindiLocale = Locale("hi", "IN")
-        val res = textToSpeech?.setLanguage(hindiLocale)
-        if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
-            Log.w(tag, "Hindi TTS voice missing or not supported on this device. Using default locale.")
-            textToSpeech?.language = Locale.getDefault()
-        }
-
-        try {
-            val audioAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build()
-            textToSpeech?.setAudioAttributes(audioAttributes)
-        } catch (e: Exception) {
-            Log.w(tag, "Could not set AudioAttributes: ${e.message}")
-        }
-
-        try {
-            val availableVoices = textToSpeech?.voices
-            if (!availableVoices.isNullOrEmpty()) {
-                val bestHindiVoice = availableVoices
-                    .filter { voice ->
-                        val lang = voice.locale.language
-                        val country = voice.locale.country
-                        lang.equals("hi", ignoreCase = true) || (lang.equals("en", ignoreCase = true) && country.equals("IN", ignoreCase = true))
-                    }
-                    .sortedWith(
-                        compareByDescending<Voice> { voice ->
-                            val name = voice.name.lowercase()
-                            when {
-                                name.contains("neural") || name.contains("wavenet") -> 4
-                                name.contains("network") || name.contains("hi-in-x-") -> 3
-                                name.contains("hi-in") -> 2
-                                else -> 1
-                            }
-                        }.thenBy { it.isNetworkConnectionRequired }
-                    )
-                    .firstOrNull()
-
-                if (bestHindiVoice != null) {
-                    textToSpeech?.voice = bestHindiVoice
-                    Log.i(tag, "Loaded natural Hindi TTS Voice: ${bestHindiVoice.name}")
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "Could not configure natural neural TTS voice: ${e.message}")
-        }
-
-        textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                _isSpeaking.value = true
-            }
-
-            override fun onDone(utteranceId: String?) {
-                _isSpeaking.value = false
-            }
-
-            override fun onError(utteranceId: String?) {
-                _isSpeaking.value = false
-            }
-        })
-        isTtsReady = true
     }
 
     private fun initSpeechRecognizer() {
@@ -279,8 +218,8 @@ class MaxVoiceManager(
             return
         }
         try {
-            textToSpeech?.setSpeechRate(speechRate.coerceIn(0.7f, 1.4f))
-            textToSpeech?.setPitch(1.02f)
+            textToSpeech?.setSpeechRate(speechRate.coerceIn(0.7f, 1.5f))
+            textToSpeech?.setPitch(1.0f)
             val params = Bundle().apply {
                 putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "max_tts_${System.currentTimeMillis()}")
             }
@@ -293,8 +232,8 @@ class MaxVoiceManager(
     fun speakInstantFiller(fillerText: String = "जी, अभी करता हूँ...") {
         if (!isTtsReady || textToSpeech == null) return
         try {
-            textToSpeech?.setSpeechRate(1.15f)
-            textToSpeech?.setPitch(1.05f)
+            textToSpeech?.setSpeechRate(1.0f)
+            textToSpeech?.setPitch(1.0f)
             val params = Bundle().apply {
                 putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "max_filler_${System.currentTimeMillis()}")
             }
