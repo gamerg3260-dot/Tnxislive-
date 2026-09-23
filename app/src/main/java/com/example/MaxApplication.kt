@@ -29,10 +29,7 @@ class MaxApplication : Application() {
 
     var callControlManager: com.example.call.CallControlManager? = null
 
-    val overlayAgentStatus = MutableStateFlow(AgentStatus.IDLE)
-    val overlaySpeechRms = MutableStateFlow(0f)
-
-    var onOverlayVoiceTriggerRequested: (() -> Unit)? = null
+    var onVoiceTriggerRequested: (() -> Unit)? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -47,11 +44,25 @@ class MaxApplication : Application() {
 
         applicationScope.launch {
             repository.initializeDefaultMemoriesIfEmpty()
+            com.example.router.GenericAppLauncher.getInstalledLaunchableApps(this@MaxApplication, forceFresh = true)
+        }
+
+        try {
+            val receiver = com.example.system.PackageChangeReceiver()
+            val filter = android.content.IntentFilter().apply {
+                addAction(android.content.Intent.ACTION_PACKAGE_ADDED)
+                addAction(android.content.Intent.ACTION_PACKAGE_REMOVED)
+                addAction(android.content.Intent.ACTION_PACKAGE_REPLACED)
+                addDataScheme("package")
+            }
+            registerReceiver(receiver, filter)
+        } catch (e: Exception) {
+            android.util.Log.w("MaxApplication", "Dynamic PackageChangeReceiver registration notice", e)
         }
     }
 
-    fun triggerVoiceListeningFromOverlay() {
-        onOverlayVoiceTriggerRequested?.invoke()
+    fun triggerVoiceListening() {
+        onVoiceTriggerRequested?.invoke()
     }
 
     companion object {

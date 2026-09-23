@@ -57,7 +57,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.accessibility.MaxAccessibilityService
-import com.example.overlay.MaxOverlayService
 import com.example.ui.components.CallControlPermissionCard
 import com.example.ui.theme.MaxDarkBg
 import com.example.ui.theme.MaxPrimary
@@ -89,7 +88,6 @@ fun SettingsScreen(
     val isAccessibilityActive by viewModel.isAccessibilityEnabled.collectAsState()
     val gestureSpeed by viewModel.gestureSpeedMs.collectAsState()
     val speechRate by viewModel.speechRate.collectAsState()
-    val overlayEnabled by viewModel.floatingOverlayEnabled.collectAsState()
 
     val enrollmentManager = viewModel.speakerEnrollmentManager
     val isVoiceEnrolled by enrollmentManager.isEnrolled.collectAsState()
@@ -289,68 +287,6 @@ fun SettingsScreen(
                         fontWeight = FontWeight.Bold
                     )
                 }
-            }
-        }
-
-        // 3. Floating Overlay Widget
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaxSurfaceElevated),
-            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(MaxSurfaceBorder)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Layers,
-                            contentDescription = "Floating Widget",
-                            tint = MaxSecondary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "फ़्लोटिंग मैक्स विजेट (Floating Bubble)",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
-                    }
-
-                    Switch(
-                        checked = overlayEnabled,
-                        onCheckedChange = { checked ->
-                            if (checked) {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
-                                    MaxOverlayService.requestOverlayPermission(context)
-                                } else {
-                                    MaxOverlayService.start(context)
-                                    viewModel.toggleFloatingOverlay(true)
-                                }
-                            } else {
-                                MaxOverlayService.stop(context)
-                                viewModel.toggleFloatingOverlay(false)
-                            }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = MaxPrimary
-                        ),
-                        modifier = Modifier.testTag("overlay_switch")
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    text = "YouTube या किसी भी ऐप के ऊपर Siri-स्टाइल नियॉन वेव और माइक विजेट तैरता रहेगा, जो बैकग्राउंड टच को बिना रोके काम करता है।",
-                    fontSize = 12.sp,
-                    color = TextSecondary
-                )
             }
         }
 

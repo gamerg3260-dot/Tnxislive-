@@ -183,10 +183,27 @@ object GenericAppLauncher {
         "settings" to listOf("com.android.settings")
     )
 
+    @Volatile
+    private var cachedInstalledApps: List<InstalledAppInfo>? = null
+
+    /**
+     * Invalidate cached app list and perform a fresh query.
+     */
+    fun invalidateCacheAndRefresh(context: Context): List<InstalledAppInfo> {
+        cachedInstalledApps = null
+        val freshList = getInstalledLaunchableApps(context, forceFresh = true)
+        Log.i(TAG, "APP_LIST_REFRESHED: Total installed apps updated to ${freshList.size}")
+        return freshList
+    }
+
     /**
      * Retrieves all launchable installed apps on the device using PackageManager.
      */
-    fun getInstalledLaunchableApps(context: Context): List<InstalledAppInfo> {
+    fun getInstalledLaunchableApps(context: Context, forceFresh: Boolean = false): List<InstalledAppInfo> {
+        if (!forceFresh) {
+            cachedInstalledApps?.let { return it }
+        }
+
         val pm = context.packageManager
         val list = mutableListOf<InstalledAppInfo>()
         val seenPackages = mutableSetOf<String>()
@@ -246,6 +263,7 @@ object GenericAppLauncher {
         }
 
         Log.d(TAG, "[InstalledApps] Total launchable apps retrieved: ${list.size}")
+        cachedInstalledApps = list
         return list
     }
 
@@ -257,11 +275,11 @@ object GenericAppLauncher {
         val cleanSpoken = normalizeString(spokenName)
         if (cleanSpoken.isBlank()) return null
 
+        Log.i(TAG, "APP_OPEN_SEARCH: searching installed apps for '$spokenName' (clean: '$cleanSpoken') across ${installedApps.size} apps")
+
         // 1. Check alias dictionary
         val aliasedName = appAliases[cleanSpoken] ?: cleanSpoken
         val target = normalizeString(aliasedName)
-
-        Log.d(TAG, "[AppMatch] Matching target: '$spokenName' -> clean: '$cleanSpoken' -> target: '$target'")
 
         // 2. Direct Well-Known Package Lookup
         val knownPkgList = wellKnownPackages[target] ?: wellKnownPackages[cleanSpoken]
@@ -269,7 +287,7 @@ object GenericAppLauncher {
             for (pkg in knownPkgList) {
                 val found = installedApps.find { it.packageName.equals(pkg, ignoreCase = true) }
                 if (found != null) {
-                    Log.i(TAG, "[AppMatch] Direct well-known package match: ${found.appName} (${found.packageName})")
+                    Log.i(TAG, "APP_OPEN_MATCH: ${found.appName} (${found.packageName}) via WellKnownPackage")
                     return found
                 }
             }
@@ -278,7 +296,7 @@ object GenericAppLauncher {
         // 3. Exact Normalized Name Match
         val exactMatch = installedApps.find { it.normalizedName == target || it.normalizedName == cleanSpoken }
         if (exactMatch != null) {
-            Log.i(TAG, "[AppMatch] Exact normalized name match: ${exactMatch.appName} (${exactMatch.packageName})")
+            Log.i(TAG, "APP_OPEN_MATCH: ${exactMatch.appName} (${exactMatch.packageName}) via ExactName")
             return exactMatch
         }
 
@@ -287,7 +305,7 @@ object GenericAppLauncher {
             it.normalizedName.startsWith(target) || target.startsWith(it.normalizedName)
         }
         if (prefixMatch != null) {
-            Log.i(TAG, "[AppMatch] Prefix match: ${prefixMatch.appName} (${prefixMatch.packageName})")
+            Log.i(TAG, "APP_OPEN_MATCH: ${prefixMatch.appName} (${prefixMatch.packageName}) via Prefix")
             return prefixMatch
         }
 
@@ -296,7 +314,7 @@ object GenericAppLauncher {
             it.normalizedName.contains(target) || (target.length >= 3 && target.contains(it.normalizedName))
         }
         if (containsMatch != null) {
-            Log.i(TAG, "[AppMatch] Substring match: ${containsMatch.appName} (${containsMatch.packageName})")
+            Log.i(TAG, "APP_OPEN_MATCH: ${containsMatch.appName} (${containsMatch.packageName}) via Substring")
             return containsMatch
         }
 
@@ -307,7 +325,7 @@ object GenericAppLauncher {
             targetTokens.any { t -> appTokens.any { at -> at == t || (t.length >= 3 && at.startsWith(t)) } }
         }
         if (tokenMatch != null) {
-            Log.i(TAG, "[AppMatch] Token word match: ${tokenMatch.appName} (${tokenMatch.packageName})")
+            Log.i(TAG, "APP_OPEN_MATCH: ${tokenMatch.appName} (${tokenMatch.packageName}) via TokenMatch")
             return tokenMatch
         }
 
@@ -316,7 +334,7 @@ object GenericAppLauncher {
             it.packageName.lowercase().contains(target) || (target == "facebook" && it.packageName.contains("katana"))
         }
         if (packageMatch != null) {
-            Log.i(TAG, "[AppMatch] Package substring match: ${packageMatch.appName} (${packageMatch.packageName})")
+            Log.i(TAG, "APP_OPEN_MATCH: ${packageMatch.appName} (${packageMatch.packageName}) via PackageSubstring")
             return packageMatch
         }
 
@@ -337,9 +355,9 @@ object GenericAppLauncher {
         }
 
         if (bestApp != null) {
-            Log.i(TAG, "[AppMatch] Fuzzy Levenshtein match ($bestScore): ${bestApp.appName} (${bestApp.packageName})")
+            Log.i(TAG, "APP_OPEN_MATCH: ${bestApp.appName} (${bestApp.packageName}) via LevenshteinScore($bestScore)")
         } else {
-            Log.w(TAG, "[AppMatch] No match found for target: '$target' across ${installedApps.size} apps")
+            Log.w(TAG, "APP_OPEN_MATCH: NOT-FOUND for '$spokenName' (target '$target') across ${installedApps.size} apps")
         }
 
         return bestApp
@@ -351,18 +369,20 @@ object GenericAppLauncher {
     fun launchApp(context: Context, appInfo: InstalledAppInfo): Boolean {
         return try {
             val pm = context.packageManager
-            val intent = pm.getLaunchIntentForPackage(appInfo.packageName)
-            if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-                context.startActivity(intent)
-                Log.i(TAG, "[AppLaunch] Successfully launched: ${appInfo.appName} (${appInfo.packageName})")
-                true
-            } else {
-                Log.e(TAG, "[AppLaunch] Launch intent is null for package: ${appInfo.packageName}")
-                false
+            var intent = pm.getLaunchIntentForPackage(appInfo.packageName)
+            if (intent == null) {
+                // Fail-safe intent creation using main intent and package name
+                intent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    `setPackage`(appInfo.packageName)
+                }
             }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            context.startActivity(intent)
+            Log.i(TAG, "APP_OPEN_LAUNCH: success for package ${appInfo.packageName}")
+            true
         } catch (e: Exception) {
-            Log.e(TAG, "[AppLaunch] Failed to launch package: ${appInfo.packageName}", e)
+            Log.e(TAG, "APP_OPEN_LAUNCH: exception/error message - ${e.localizedMessage}", e)
             false
         }
     }

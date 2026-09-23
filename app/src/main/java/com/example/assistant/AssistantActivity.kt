@@ -18,8 +18,8 @@ class AssistantActivity : Activity() {
         Log.i("AssistantActivity", "AssistantActivity launched via Assist Intent")
 
         try {
-            // Trigger overlay listening if application is running
-            MaxApplication.instance.triggerVoiceListeningFromOverlay()
+            // Trigger voice listening if application is running
+            MaxApplication.instance.triggerVoiceListening()
         } catch (e: Exception) {
             // Fallback: Launch MainActivity with auto-listening extra
             val intent = Intent(this, MainActivity::class.java).apply {

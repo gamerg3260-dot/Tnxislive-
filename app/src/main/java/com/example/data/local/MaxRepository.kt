@@ -23,9 +23,6 @@ class MaxRepository(
     private val _speechRate = MutableStateFlow(prefs.getFloat("speech_rate", 1.0f))
     val speechRate: StateFlow<Float> = _speechRate.asStateFlow()
 
-    private val _floatingOverlayEnabled = MutableStateFlow(prefs.getBoolean("floating_overlay_enabled", false))
-    val floatingOverlayEnabled: StateFlow<Boolean> = _floatingOverlayEnabled.asStateFlow()
-
     val recentHistory: Flow<List<CommandHistoryEntity>> = maxDao.getRecentHistory()
     val allMemories: Flow<List<UserMemoryEntity>> = maxDao.getAllMemories()
 
@@ -49,11 +46,6 @@ class MaxRepository(
     fun setSpeechRate(rate: Float) {
         prefs.edit().putFloat("speech_rate", rate).apply()
         _speechRate.value = rate
-    }
-
-    fun setFloatingOverlayEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("floating_overlay_enabled", enabled).apply()
-        _floatingOverlayEnabled.value = enabled
     }
 
     suspend fun logCommand(

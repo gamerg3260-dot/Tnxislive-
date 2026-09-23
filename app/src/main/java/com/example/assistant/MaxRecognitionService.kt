@@ -15,7 +15,7 @@ class MaxRecognitionService : RecognitionService() {
     override fun onStartListening(recognizerIntent: Intent?, listener: Callback?) {
         Log.d(tag, "onStartListening requested")
         try {
-            MaxApplication.instance.triggerVoiceListeningFromOverlay()
+            MaxApplication.instance.triggerVoiceListening()
         } catch (e: Exception) {
             Log.e(tag, "Failed to start listening", e)
         }

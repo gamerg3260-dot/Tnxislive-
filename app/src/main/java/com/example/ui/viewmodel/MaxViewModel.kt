@@ -176,23 +176,11 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
     val customApiKey = repository.customApiKey
     val gestureSpeedMs = repository.gestureSpeedMs
     val speechRate = repository.speechRate
-    val floatingOverlayEnabled = repository.floatingOverlayEnabled
 
     init {
         app.callControlManager = callControlManager
-        app.onOverlayVoiceTriggerRequested = {
+        app.onVoiceTriggerRequested = {
             toggleListening()
-        }
-
-        viewModelScope.launch {
-            _agentStatus.collect { status ->
-                app.overlayAgentStatus.value = status
-            }
-        }
-        viewModelScope.launch {
-            voiceManager.speechRms.collect { rms ->
-                app.overlaySpeechRms.value = rms
-            }
         }
     }
 
@@ -777,10 +765,6 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setGestureSpeed(speedMs: Long) {
         repository.setGestureSpeedMs(speedMs)
-    }
-
-    fun toggleFloatingOverlay(enabled: Boolean) {
-        repository.setFloatingOverlayEnabled(enabled)
     }
 
     fun saveMemory(key: String, value: String, category: String, descHindi: String) {

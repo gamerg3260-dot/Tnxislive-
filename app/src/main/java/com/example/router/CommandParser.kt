@@ -368,9 +368,12 @@ object CommandParser {
         }
 
         // 3. Extract target entity by stripping verb and filler words
-        var targetPart = cleanedQuery.replace(matchedVerb, "")
+        var targetPart = cleanedQuery.replace(matchedVerb, " ")
         for (filler in APP_FILLER_WORDS) {
-            targetPart = targetPart.replace("\\b$filler\\b".toRegex(RegexOption.IGNORE_CASE), "")
+            targetPart = targetPart.replace(" $filler ", " ")
+                .replace(" $filler", " ")
+                .replace("$filler ", " ")
+                .replace(Regex("(?i)$filler"), " ")
         }
         val cleanTarget = targetPart.trim().replace("\\s+".toRegex(), " ")
 

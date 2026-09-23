@@ -51,15 +51,17 @@ object CommandRouter {
 
     // Verbs indicating app opening
     private val OPEN_VERBS = listOf(
-        "kholo", "khol do", "kholiye", "kholna", "open", "launch", "start",
-        "chalao", "chala do", "play", "open karo", "open kar do", "app kholo",
-        "खोलो", "खोल दो", "खोलिए", "चलाओ", "चला दो", "चालू करो", "लॉन्च करो", "ओपन करो", "ओपन"
+        "kholo", "khol do", "khol k", "khol ke", "kholiye", "kholna", "open", "launch", "start",
+        "chalao", "chala do", "chalaayein", "play", "open karo", "open kar do", "open kardo", "app kholo", "open kijiye",
+        "kholiye na", "dikhao", "dikha do", "chaloo karo", "chalu karo", "chalu kar do", "run",
+        "खोलो", "खोल दो", "खोलिए", "चलाओ", "चला दो", "चालू करो", "लॉन्च करो", "ओपन करो", "ओपन", "दिखाओ", "दिखा दो"
     )
 
     // Filler particles in app opening commands
     private val APP_FILLERS = listOf(
-        "app", "application", "apk", "ko", "par", "pe", "karo", "kar do", "kardo",
-        "ऐप", "एप्लिकेशन", "को", "पर", "पे", "करो", "कर दो", "प्लीज", "जरा"
+        "app", "application", "apk", "ko", "par", "pe", "karo", "kar do", "kardo", "kijiye", "kariye",
+        "pls", "please", "zara", "jara", "se", "mein", "me",
+        "ऐप", "एप्लिकेशन", "को", "पर", "पे", "करो", "कर दो", "प्लीज", "जरा", "कीजिये", "करिये"
     )
 
     /**
@@ -136,6 +138,8 @@ object CommandRouter {
         if (isPureAppLaunchCommand) {
             category = CommandCategory.OFFLINE_TASK
             actionSummary = "OFFLINE_APP_LAUNCH: Open ${matchedApp!!.appName} locally via Intent"
+            Log.i(TAG, "APP_OPEN_REQUEST: $rawCommand")
+            Log.i(TAG, "APP_OPEN_ROUTE: LOCAL")
         } else if (isHardwareOrLocalTask && matchedApp == null) {
             category = CommandCategory.OFFLINE_TASK
             actionSummary = "OFFLINE_SYSTEM_TASK: Local Hardware/System action executed"
@@ -196,11 +200,31 @@ object CommandRouter {
 
     private fun isPureAppOpenRequest(cleaned: String, appNameCandidate: String): Boolean {
         var text = cleaned.lowercase()
-        text = text.replace(appNameCandidate.lowercase(), "").trim()
-        for (verb in OPEN_VERBS) text = text.replace(verb.lowercase(), "")
-        for (filler in APP_FILLERS) text = text.replace(filler.lowercase(), "")
-        text = text.replace(Regex("\\s+"), "").trim()
-        return text.length < 3
+
+        // Remove candidate app name
+        if (appNameCandidate.isNotBlank()) {
+            text = text.replace(appNameCandidate.lowercase(), "")
+        }
+
+        // Remove open verbs & fillers
+        for (verb in OPEN_VERBS) {
+            text = text.replace(verb.lowercase(), "")
+        }
+        for (filler in APP_FILLERS) {
+            text = text.replace(filler.lowercase(), "")
+        }
+
+        // Clean up remaining non-word characters and whitespace
+        text = text.replace(Regex("[^a-zA-Z0-9\\u0900-\\u097F]"), "").trim()
+
+        // If remaining text is blank or very short (<= 3 chars), it's 100% pure app launch
+        if (text.length <= 3) return true
+
+        // Check if remaining text contains explicit screen perception keywords
+        val screenTaskKeywords = listOf("search", "find", "message", "chat", "msg", "bhejo", "send", "read", "padho", "video", "song", "play", "scroll", "comment", "like", "share", "खोजो", "भेजो", "पढ़ो")
+        val hasSecondaryTask = screenTaskKeywords.any { text.contains(it) }
+
+        return !hasSecondaryTask
     }
 
     private fun isHardwareToggleOrSystemTask(cleaned: String): Boolean {

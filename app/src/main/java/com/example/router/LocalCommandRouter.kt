@@ -238,13 +238,14 @@ class LocalCommandRouter(private val context: Context) {
 
         if (parsed.intent != ParsedIntent.OPEN_APP) {
             val openPrefixes = listOf(
-                "open ", "kholo ", "launch ", "start ", "chalao ", "chala do ", "khol do ",
-                "kholiye ", "kholna ", "ओपन ", "खोलो ", "चलाओ ", "लॉन्च ", "शुरू करो ", "चालू करो "
+                "open ", "kholo ", "launch ", "start ", "chalao ", "chala do ", "khol do ", "khol k ", "khol ke ",
+                "kholiye ", "kholna ", "dikhao ", "dikha do ", "chalu ", "chaloo ", "run ",
+                "ओपन ", "खोलो ", "चलाओ ", "लॉन्च ", "शुरू करो ", "चालू करो ", "दिखाओ "
             )
             val openSuffixes = listOf(
-                " kholo", " khol do", " kholiye", " chalao", " chala do", " open karo", " open kar do",
-                " open", " app open karo", " app kholo", " application kholo", " app", " application",
-                " खोलो", " खोल दो", " खोलिए", " चलाओ", " चला दो", " ओपन करो", " ऐप खोलो", " चालू करो", " लॉन्च करो"
+                " kholo", " khol do", " kholiye", " chalao", " chala do", " open karo", " open kar do", " open kardo",
+                " open", " app open karo", " app kholo", " application kholo", " app", " application", " chalu karo",
+                " खोलो", " खोल दो", " खोलिए", " चलाओ", " चला दो", " ओपन करो", " ऐप खोलो", " चालू करो", " लॉन्च करो", " दिखाओ"
             )
 
             val hasOpenVerb = openPrefixes.any { query.startsWith(it) } || openSuffixes.any { query.contains(it) }
