@@ -71,6 +71,10 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.MaxViewModel
 
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.GraphicEq
+import com.example.ui.components.VoiceEnrollmentDialog
+
 @Composable
 fun SettingsScreen(
     viewModel: MaxViewModel,
@@ -83,9 +87,21 @@ fun SettingsScreen(
     val speechRate by viewModel.speechRate.collectAsState()
     val overlayEnabled by viewModel.floatingOverlayEnabled.collectAsState()
 
+    val enrollmentManager = viewModel.speakerEnrollmentManager
+    val isVoiceEnrolled by enrollmentManager.isEnrolled.collectAsState()
+    val isVoiceVerificationEnabled by enrollmentManager.isVerificationEnabled.collectAsState()
+    var showVoiceEnrollmentDialog by remember { mutableStateOf(false) }
+
     var apiKeyInput by remember(customApiKey) { mutableStateOf(customApiKey) }
     var tempSpeechRate by remember(speechRate) { mutableFloatStateOf(speechRate) }
     var tempGestureSpeed by remember(gestureSpeed) { mutableFloatStateOf(gestureSpeed.toFloat()) }
+
+    if (showVoiceEnrollmentDialog) {
+        VoiceEnrollmentDialog(
+            enrollmentManager = enrollmentManager,
+            onDismiss = { showVoiceEnrollmentDialog = false }
+        )
+    }
 
     Column(
         modifier = modifier
@@ -319,10 +335,120 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(4.dp))
 
                 Text(
-                    text = "YouTube या किसी भी ऐप के ऊपर एक छोटा माइक बटन तैरता रहेगा, जिससे कभी भी मैक्स को वॉइस कमांड दे सकते हैं।",
+                    text = "YouTube या किसी भी ऐप के ऊपर Siri-स्टाइल नियॉन वेव और माइक विजेट तैरता रहेगा, जो बैकग्राउंड टच को बिना रोके काम करता है।",
                     fontSize = 12.sp,
                     color = TextSecondary
                 )
+            }
+        }
+
+        // 3.5. Voice Enrollment (Speaker Recognition / Owner Lock)
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaxSurfaceElevated),
+            border = CardDefaults.outlinedCardBorder().copy(
+                brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                    listOf(MaxPrimary.copy(alpha = 0.6f), Color(0xFF00F5FF).copy(alpha = 0.4f))
+                )
+            ),
+            modifier = Modifier.fillMaxWidth().testTag("voice_enrollment_card")
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Fingerprint,
+                            contentDescription = "Voice Enrollment",
+                            tint = if (isVoiceEnrolled) Color(0xFF00F5FF) else MaxWarning,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "वॉयस एनरोलमेंट (Owner Voice Lock)",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = if (isVoiceEnrolled) "✅ आपकी आवाज़ रजिस्टर्ड है" else "⚠️ आवाज़ रजिस्टर नहीं है",
+                                fontSize = 11.sp,
+                                color = if (isVoiceEnrolled) MaxSuccess else MaxWarning
+                            )
+                        }
+                    }
+
+                    Switch(
+                        checked = isVoiceVerificationEnabled,
+                        onCheckedChange = { enabled ->
+                            enrollmentManager.setVerificationEnabled(enabled)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Color(0xFF00F5FF)
+                        ),
+                        modifier = Modifier.testTag("voice_verification_switch")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "मैक्स सिर्फ आपकी आवाज़ (5 सैंपल फ्रैसेस) की ऑन-डिवाइस कोसाइन सिमिलैरिटी मैच करेगा। किसी अन्य व्यक्ति की आवाज़ पर कमांड्स अनदेखी रहेंगी।",
+                    fontSize = 12.sp,
+                    color = TextSecondary,
+                    lineHeight = 16.sp
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            enrollmentManager.startNewEnrollment()
+                            showVoiceEnrollmentDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isVoiceEnrolled) Color(0xFF1E293B) else Color(0xFF2563EB)
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("enroll_voice_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.GraphicEq,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isVoiceEnrolled) "आवाज़ री-ट्रेन करें (Re-train)" else "आवाज़ रजिस्टर करें (Enroll)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+
+                    if (isVoiceEnrolled) {
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = {
+                                enrollmentManager.resetEnrollment()
+                            },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("रीसेट", fontSize = 12.sp, color = Color(0xFFF43F5E))
+                        }
+                    }
+                }
             }
         }
 

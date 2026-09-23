@@ -5,9 +5,11 @@ import com.example.data.local.MaxDatabase
 import com.example.data.local.MaxRepository
 import com.example.gemini.GeminiClient
 import com.example.simulator.YouTubeSimulatorState
+import com.example.ui.viewmodel.AgentStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 class MaxApplication : Application() {
@@ -26,6 +28,9 @@ class MaxApplication : Application() {
     val simulatorState = YouTubeSimulatorState()
 
     var callControlManager: com.example.call.CallControlManager? = null
+
+    val overlayAgentStatus = MutableStateFlow(AgentStatus.IDLE)
+    val overlaySpeechRms = MutableStateFlow(0f)
 
     var onOverlayVoiceTriggerRequested: (() -> Unit)? = null
 

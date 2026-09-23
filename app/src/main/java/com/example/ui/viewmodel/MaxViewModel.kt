@@ -74,6 +74,8 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
         processCommand(command)
     }
 
+    val speakerEnrollmentManager get() = voiceManager.speakerEnrollmentManager
+
     val callControlManager = CallControlManager(
         context = application,
         scope = viewModelScope,
@@ -172,6 +174,17 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
         app.callControlManager = callControlManager
         app.onOverlayVoiceTriggerRequested = {
             toggleListening()
+        }
+
+        viewModelScope.launch {
+            _agentStatus.collect { status ->
+                app.overlayAgentStatus.value = status
+            }
+        }
+        viewModelScope.launch {
+            voiceManager.speechRms.collect { rms ->
+                app.overlaySpeechRms.value = rms
+            }
         }
     }
 

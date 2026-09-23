@@ -4,28 +4,45 @@ import android.annotation.SuppressLint
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.TextView
 import com.example.MaxApplication
-import com.example.R
+import com.example.ui.viewmodel.AgentStatus
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
+/**
+ * Siri-Style Ambient Floating Glow Overlay Service.
+ * Displays a non-intrusive, glowing bottom wave ribbon across apps.
+ * Completely transparent background with zero touch blocking outside the strip.
+ */
 class MaxOverlayService : Service() {
 
+    private val tag = "MaxOverlayService"
     private var windowManager: WindowManager? = null
-    private var overlayView: View? = null
+    private var overlayContainer: FrameLayout? = null
+    private var siriWaveformView: SiriWaveformView? = null
     private var params: WindowManager.LayoutParams? = null
+
+    private val serviceScope = CoroutineScope(Dispatchers.Main)
+    private var statusCollectorJob: Job? = null
+    private var hideJob: Job? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -33,6 +50,7 @@ class MaxOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Log.w(tag, "Overlay permission not granted. Stopping service.")
             stopSelf()
             return
         }
@@ -46,73 +64,61 @@ class MaxOverlayService : Service() {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
+        val density = resources.displayMetrics.density
+        val pillWidth = (300 * density).toInt()
+        val pillHeight = (68 * density).toInt()
+
+        // Critical: FLAG_NOT_FOCUSABLE + FLAG_NOT_TOUCH_MODAL allows all taps & scrolls outside to pass through freely!
         params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            pillWidth,
+            pillHeight,
             layoutType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 24
-            y = 350
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = (24 * density).toInt() // Margin from bottom edge
         }
 
-        // Create sleek floating container
         val root = FrameLayout(this).apply {
-            val bg = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                colors = intArrayOf(Color.parseColor("#7C3AED"), Color.parseColor("#2563EB"))
-                setStroke(4, Color.parseColor("#38BDF8"))
-            }
-            background = bg
-            setPadding(28, 28, 28, 28)
-            elevation = 20f
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            clipChildren = false
+            clipToPadding = false
         }
 
-        val icon = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_btn_speak_now)
-            setColorFilter(Color.WHITE)
+        siriWaveformView = SiriWaveformView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
         }
+        root.addView(siriWaveformView)
 
-        val layoutParams = FrameLayout.LayoutParams(72, 72).apply {
-            gravity = Gravity.CENTER
-        }
-        root.addView(icon, layoutParams)
-
-        // Make it draggable
-        var initialX = 0
-        var initialY = 0
-        var initialTouchX = 0f
-        var initialTouchY = 0f
-        var isClick = false
+        // Allow user to tap the floating strip to trigger / toggle voice listening
+        var startX = 0f
+        var startY = 0f
+        var isClick = true
 
         root.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    initialX = params?.x ?: 0
-                    initialY = params?.y ?: 0
-                    initialTouchX = event.rawX
-                    initialTouchY = event.rawY
+                    startX = event.rawX
+                    startY = event.rawY
                     isClick = true
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - initialTouchX).toInt()
-                    val dy = (event.rawY - initialTouchY).toInt()
-                    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+                    val dx = Math.abs(event.rawX - startX)
+                    val dy = Math.abs(event.rawY - startY)
+                    if (dx > 15 || dy > 15) {
                         isClick = false
                     }
-                    params?.x = initialX + dx
-                    params?.y = initialY + dy
-                    try {
-                        windowManager?.updateViewLayout(root, params)
-                    } catch (ignored: Exception) {}
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     if (isClick) {
-                        // Trigger voice assistant
                         val app = application as? MaxApplication
                         app?.triggerVoiceListeningFromOverlay()
                     }
@@ -122,21 +128,58 @@ class MaxOverlayService : Service() {
             }
         }
 
-        overlayView = root
+        overlayContainer = root
         try {
-            windowManager?.addView(overlayView, params)
+            windowManager?.addView(overlayContainer, params)
+            Log.i(tag, "Siri-style floating overlay attached successfully.")
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(tag, "Error attaching overlay: ${e.message}", e)
+        }
+
+        observeAgentState()
+    }
+
+    private fun observeAgentState() {
+        val app = application as? MaxApplication ?: return
+
+        statusCollectorJob = serviceScope.launch {
+            app.overlayAgentStatus.collectLatest { status ->
+                siriWaveformView?.updateState(status, app.overlaySpeechRms.value)
+
+                if (status == AgentStatus.IDLE) {
+                    // Smoothly auto-fade out
+                    hideJob?.cancel()
+                    hideJob = launch {
+                        delay(2200)
+                        if (app.overlayAgentStatus.value == AgentStatus.IDLE) {
+                            siriWaveformView?.visibility = View.VISIBLE
+                        }
+                    }
+                } else {
+                    hideJob?.cancel()
+                    siriWaveformView?.visibility = View.VISIBLE
+                }
+            }
+        }
+
+        serviceScope.launch {
+            app.overlaySpeechRms.collectLatest { rms ->
+                if (app.overlayAgentStatus.value != AgentStatus.IDLE) {
+                    siriWaveformView?.updateState(app.overlayAgentStatus.value, rms)
+                }
+            }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        if (overlayView != null) {
+        statusCollectorJob?.cancel()
+        hideJob?.cancel()
+        if (overlayContainer != null) {
             try {
-                windowManager?.removeView(overlayView)
+                windowManager?.removeView(overlayContainer)
             } catch (ignored: Exception) {}
-            overlayView = null
+            overlayContainer = null
         }
     }
 
@@ -144,13 +187,21 @@ class MaxOverlayService : Service() {
         fun start(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(context)) {
                 val intent = Intent(context, MaxOverlayService::class.java)
-                context.startService(intent)
+                try {
+                    context.startService(intent)
+                } catch (e: Exception) {
+                    Log.e("MaxOverlayService", "Failed to start service: ${e.message}")
+                }
             }
         }
 
         fun stop(context: Context) {
             val intent = Intent(context, MaxOverlayService::class.java)
-            context.stopService(intent)
+            try {
+                context.stopService(intent)
+            } catch (e: Exception) {
+                Log.e("MaxOverlayService", "Failed to stop service: ${e.message}")
+            }
         }
 
         fun requestOverlayPermission(context: Context) {
@@ -159,7 +210,7 @@ class MaxOverlayService : Service() {
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     Uri.parse("package:${context.packageName}")
                 ).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(intent)
             }

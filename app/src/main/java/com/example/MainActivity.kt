@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -24,16 +25,20 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.example.ui.components.SiriBottomWaveBar
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.MemoryScreen
 import com.example.ui.screens.SettingsScreen
@@ -115,63 +120,80 @@ fun MainAppContent(viewModel: MaxViewModel) {
         NavTabItem("Settings", Icons.Default.Settings, "nav_settings")
     )
 
-    Scaffold(
-        bottomBar = {
-            // Hide bottom bar when inside YouTube simulator for immersion
-            if (selectedTab != 1) {
-                NavigationBar(
-                    containerColor = MaxSurface,
-                    contentColor = TextPrimary
-                ) {
-                    navItems.forEachIndexed { index, item ->
-                        val isSelected = selectedTab == index
-                        NavigationBarItem(
-                            selected = isSelected,
-                            onClick = { selectedTab = index },
-                            icon = {
-                                Icon(
-                                    imageVector = item.icon,
-                                    contentDescription = item.title,
-                                    tint = if (isSelected) MaxPrimary else TextSecondary
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = item.title,
-                                    color = if (isSelected) MaxPrimary else TextSecondary
-                                )
-                            },
-                            colors = NavigationBarItemDefaults.colors(
-                                indicatorColor = MaxPrimary.copy(alpha = 0.2f)
-                            ),
-                            modifier = Modifier.testTag(item.testTag)
-                        )
+    val agentStatus by viewModel.agentStatus.collectAsState()
+    val speechRms by viewModel.voiceManager.speechRms.collectAsState()
+    val statusMsg by viewModel.statusMessage.collectAsState()
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            bottomBar = {
+                // Hide bottom bar when inside YouTube simulator for immersion
+                if (selectedTab != 1) {
+                    NavigationBar(
+                        containerColor = MaxSurface,
+                        contentColor = TextPrimary
+                    ) {
+                        navItems.forEachIndexed { index, item ->
+                            val isSelected = selectedTab == index
+                            NavigationBarItem(
+                                selected = isSelected,
+                                onClick = { selectedTab = index },
+                                icon = {
+                                    Icon(
+                                        imageVector = item.icon,
+                                        contentDescription = item.title,
+                                        tint = if (isSelected) MaxPrimary else TextSecondary
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = item.title,
+                                        color = if (isSelected) MaxPrimary else TextSecondary
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    indicatorColor = MaxPrimary.copy(alpha = 0.2f)
+                                ),
+                                modifier = Modifier.testTag(item.testTag)
+                            )
+                        }
                     }
                 }
+            },
+            containerColor = MaxDarkBg,
+            modifier = Modifier.fillMaxSize()
+        ) { innerPadding ->
+            when (selectedTab) {
+                0 -> DashboardScreen(
+                    viewModel = viewModel,
+                    onNavigateToSimulator = { selectedTab = 1 },
+                    modifier = Modifier.padding(innerPadding)
+                )
+                1 -> YouTubeSimulatorScreen(
+                    viewModel = viewModel,
+                    onNavigateBack = { selectedTab = 0 }
+                )
+                2 -> MemoryScreen(
+                    viewModel = viewModel,
+                    modifier = Modifier.padding(innerPadding)
+                )
+                3 -> SettingsScreen(
+                    viewModel = viewModel,
+                    modifier = Modifier.padding(innerPadding)
+                )
             }
-        },
-        containerColor = MaxDarkBg,
-        modifier = Modifier.fillMaxSize()
-    ) { innerPadding ->
-        when (selectedTab) {
-            0 -> DashboardScreen(
-                viewModel = viewModel,
-                onNavigateToSimulator = { selectedTab = 1 },
-                modifier = Modifier.padding(innerPadding)
-            )
-            1 -> YouTubeSimulatorScreen(
-                viewModel = viewModel,
-                onNavigateBack = { selectedTab = 0 }
-            )
-            2 -> MemoryScreen(
-                viewModel = viewModel,
-                modifier = Modifier.padding(innerPadding)
-            )
-            3 -> SettingsScreen(
-                viewModel = viewModel,
-                modifier = Modifier.padding(innerPadding)
-            )
         }
+
+        // Floating Siri-Style Neon Animated Ribbon Overlay
+        SiriBottomWaveBar(
+            agentStatus = agentStatus,
+            speechRms = speechRms,
+            statusMessage = statusMsg,
+            onBarClicked = { viewModel.toggleListening() },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = if (selectedTab != 1) 84.dp else 24.dp)
+        )
     }
 }
 

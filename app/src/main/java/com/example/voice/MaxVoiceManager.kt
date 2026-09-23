@@ -14,10 +14,14 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.Locale
 
 class MaxVoiceManager(
     private val context: Context,
+    val speakerEnrollmentManager: SpeakerEnrollmentManager = SpeakerEnrollmentManager(context),
     private val onCommandReceived: (String) -> Unit
 ) {
     private val tag = "MaxVoiceManager"
@@ -37,6 +41,8 @@ class MaxVoiceManager(
 
     private val _transcription = MutableStateFlow("")
     val transcription: StateFlow<String> = _transcription.asStateFlow()
+
+    private val audioBufferStream = ByteArrayOutputStream()
 
     init {
         initTts()
@@ -77,7 +83,6 @@ class MaxVoiceManager(
             textToSpeech?.language = Locale.getDefault()
         }
 
-        // Configure optimal AudioAttributes for clear, warm, presence-rich voice assistant speech
         try {
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ASSISTANT)
@@ -88,7 +93,6 @@ class MaxVoiceManager(
             Log.w(tag, "Could not set AudioAttributes: ${e.message}")
         }
 
-        // Auto-select highest quality natural/neural Hindi voice from Google TTS
         try {
             val availableVoices = textToSpeech?.voices
             if (!availableVoices.isNullOrEmpty()) {
@@ -98,34 +102,27 @@ class MaxVoiceManager(
                         val country = voice.locale.country
                         lang.equals("hi", ignoreCase = true) || (lang.equals("en", ignoreCase = true) && country.equals("IN", ignoreCase = true))
                     }
-                    .minByOrNull { voice ->
-                        val name = voice.name.lowercase()
-                        when {
-                            name.contains("hi-in-x-hie-local") -> 1
-                            name.contains("hi-in-x-hid-local") -> 2
-                            name.contains("hi-in-x-hic-local") -> 3
-                            name.contains("hi-in-x-hia-local") -> 4
-                            name.contains("neural") || name.contains("studio") || name.contains("wavenet") -> 5
-                            name.contains("hi-in-x-hie-network") -> 6
-                            name.contains("hi-in-x-hid-network") -> 7
-                            voice.quality >= Voice.QUALITY_HIGH -> 8
-                            !voice.isNetworkConnectionRequired -> 9
-                            else -> 20
-                        }
-                    }
+                    .sortedWith(
+                        compareByDescending<Voice> { voice ->
+                            val name = voice.name.lowercase()
+                            when {
+                                name.contains("neural") || name.contains("wavenet") -> 4
+                                name.contains("network") || name.contains("hi-in-x-") -> 3
+                                name.contains("hi-in") -> 2
+                                else -> 1
+                            }
+                        }.thenBy { it.isNetworkConnectionRequired }
+                    )
+                    .firstOrNull()
 
                 if (bestHindiVoice != null) {
                     textToSpeech?.voice = bestHindiVoice
-                    Log.i(tag, "Selected natural Hindi voice: ${bestHindiVoice.name} (quality: ${bestHindiVoice.quality})")
+                    Log.i(tag, "Loaded natural Hindi TTS Voice: ${bestHindiVoice.name}")
                 }
             }
         } catch (e: Exception) {
-            Log.w(tag, "Voice selection fallback: ${e.message}")
+            Log.w(tag, "Could not configure natural neural TTS voice: ${e.message}")
         }
-
-        // Warm, natural pitch and speed (energetic and friendly, not flat or robotic)
-        textToSpeech?.setPitch(1.02f)
-        textToSpeech?.setSpeechRate(1.03f)
 
         textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
@@ -154,6 +151,9 @@ class MaxVoiceManager(
                 setRecognitionListener(object : RecognitionListener {
                     override fun onReadyForSpeech(params: Bundle?) {
                         _isListening.value = true
+                        synchronized(audioBufferStream) {
+                            audioBufferStream.reset()
+                        }
                     }
 
                     override fun onBeginningOfSpeech() {
@@ -161,11 +161,18 @@ class MaxVoiceManager(
                     }
 
                     override fun onRmsChanged(rmsdB: Float) {
-                        // Normalize roughly 0..10 dB to 0..1
                         _speechRms.value = (rmsdB.coerceAtLeast(0f) / 10f).coerceIn(0f, 1f)
                     }
 
-                    override fun onBufferReceived(buffer: ByteArray?) {}
+                    override fun onBufferReceived(buffer: ByteArray?) {
+                        if (buffer != null) {
+                            synchronized(audioBufferStream) {
+                                if (audioBufferStream.size() < 16000 * 2 * 4) { // Up to 4 seconds
+                                    audioBufferStream.write(buffer)
+                                }
+                            }
+                        }
+                    }
 
                     override fun onEndOfSpeech() {
                         _isListening.value = false
@@ -183,9 +190,19 @@ class MaxVoiceManager(
                         _speechRms.value = 0f
                         val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         val text = matches?.firstOrNull() ?: ""
+
                         if (text.isNotBlank()) {
-                            _transcription.value = text
-                            onCommandReceived(text)
+                            // On-Device Speaker Verification
+                            val audioBytes = synchronized(audioBufferStream) { audioBufferStream.toByteArray() }
+                            val isSpeakerValid = verifySpeakerIfEnrolled(audioBytes)
+
+                            if (isSpeakerValid) {
+                                _transcription.value = text
+                                onCommandReceived(text)
+                            } else {
+                                Log.w(tag, "Speaker verification rejected. Command ignored.")
+                                _transcription.value = "⚠️ अपरिचित आवाज़ — कमांड अनदेखा किया गया"
+                            }
                         }
                     }
 
@@ -205,6 +222,25 @@ class MaxVoiceManager(
         }
     }
 
+    private fun verifySpeakerIfEnrolled(audioBytes: ByteArray): Boolean {
+        if (!speakerEnrollmentManager.isVerificationEnabled.value || !speakerEnrollmentManager.isEnrolled.value) {
+            return true
+        }
+
+        if (audioBytes.size < 3200) {
+            // Buffer too small or bypassed, allow command
+            return true
+        }
+
+        val shortCount = audioBytes.size / 2
+        val shortBuffer = ShortArray(shortCount)
+        ByteBuffer.wrap(audioBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shortBuffer)
+
+        val result = speakerEnrollmentManager.verifySpeakerAudio(shortBuffer, shortCount)
+        Log.i(tag, "Verification Result: isMatch=${result.isMatch}, score=${result.similarity}, threshold=${result.threshold}")
+        return result.isMatch
+    }
+
     fun startListening() {
         stopSpeaking()
         _transcription.value = "सुन रहा हूँ..."
@@ -214,7 +250,7 @@ class MaxVoiceManager(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
             putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("en-IN", "hi"))
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "मैक्स को अपनी बात कहें (जैसे: 'YouTube खोलो', 'Ad skip karo')")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "मैक्स को अपनी बात कहें (जैसे: 'YouTube खोलो', 'फोन लॉक करो')")
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         }
@@ -230,62 +266,64 @@ class MaxVoiceManager(
     fun stopListening() {
         try {
             speechRecognizer?.stopListening()
+            _isListening.value = false
+            _speechRms.value = 0f
         } catch (e: Exception) {
-            Log.e(tag, "stopListening failed", e)
+            Log.e(tag, "stopListening error", e)
         }
-        _isListening.value = false
-        _speechRms.value = 0f
     }
 
-    fun speak(textHindi: String, speechRate: Float = 1.05f) {
-        if (!isTtsReady || textHindi.isBlank()) return
-        _isSpeaking.value = true
-        textToSpeech?.setSpeechRate(speechRate)
-        textToSpeech?.speak(textHindi, TextToSpeech.QUEUE_FLUSH, null, "max_utterance_${System.currentTimeMillis()}")
+    fun speak(text: String, speechRate: Float = 1.0f) {
+        if (!isTtsReady || textToSpeech == null) {
+            Log.w(tag, "TTS is not ready yet.")
+            return
+        }
+        try {
+            textToSpeech?.setSpeechRate(speechRate.coerceIn(0.7f, 1.4f))
+            textToSpeech?.setPitch(1.02f)
+            val params = Bundle().apply {
+                putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "max_tts_${System.currentTimeMillis()}")
+            }
+            textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "max_tts_${System.currentTimeMillis()}")
+        } catch (e: Exception) {
+            Log.e(tag, "speak error", e)
+        }
     }
 
-    /**
-     * Ultra low-latency streaming TTS chunk speaker.
-     * Starts speaking the first complete sentence chunk immediately (QUEUE_FLUSH),
-     * and queues subsequent chunks seamlessly (QUEUE_ADD) without audio stutter.
-     */
-    fun speakStreamChunk(chunkHindi: String, isFirstChunk: Boolean = false, speechRate: Float = 1.08f) {
-        if (!isTtsReady || chunkHindi.isBlank()) return
-        _isSpeaking.value = true
-        textToSpeech?.setSpeechRate(speechRate)
-        val queueMode = if (isFirstChunk) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
-        textToSpeech?.speak(chunkHindi, queueMode, null, "stream_chunk_${System.currentTimeMillis()}")
-    }
-
-    /**
-     * Action-oriented conversational filler (e.g., "ठीक है, अभी करता हूँ...", "जी, तुरंत कर रहा हूँ...")
-     * played ONLY when Gemini cloud API network latency exceeds 380ms to provide responsive feedback.
-     */
-    fun speakInstantFiller(fillerText: String = "ठीक है, अभी करता हूँ...", speechRate: Float = 1.15f) {
-        if (!isTtsReady || _isSpeaking.value) return
-        _isSpeaking.value = true
-        textToSpeech?.setSpeechRate(speechRate)
-        textToSpeech?.speak(fillerText, TextToSpeech.QUEUE_FLUSH, null, "filler_${System.currentTimeMillis()}")
+    fun speakInstantFiller(fillerText: String = "जी, अभी करता हूँ...") {
+        if (!isTtsReady || textToSpeech == null) return
+        try {
+            textToSpeech?.setSpeechRate(1.15f)
+            textToSpeech?.setPitch(1.05f)
+            val params = Bundle().apply {
+                putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "max_filler_${System.currentTimeMillis()}")
+            }
+            textToSpeech?.speak(fillerText, TextToSpeech.QUEUE_FLUSH, params, "max_filler_${System.currentTimeMillis()}")
+        } catch (e: Exception) {
+            Log.e(tag, "speakInstantFiller error", e)
+        }
     }
 
     fun stopSpeaking() {
-        if (isTtsReady) {
-            textToSpeech?.stop()
+        try {
+            if (textToSpeech?.isSpeaking == true) {
+                textToSpeech?.stop()
+                _isSpeaking.value = false
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "stopSpeaking error", e)
         }
-        _isSpeaking.value = false
     }
 
     fun destroy() {
         try {
             speechRecognizer?.destroy()
-        } catch (e: Exception) {
-            Log.e(tag, "Error destroying SpeechRecognizer", e)
-        }
-        try {
+            speechRecognizer = null
             textToSpeech?.stop()
             textToSpeech?.shutdown()
+            textToSpeech = null
         } catch (e: Exception) {
-            Log.e(tag, "Error shutting down TextToSpeech", e)
+            Log.e(tag, "destroy error", e)
         }
     }
 }

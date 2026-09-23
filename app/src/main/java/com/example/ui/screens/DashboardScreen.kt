@@ -77,6 +77,11 @@ import com.example.ui.theme.MaxSurfaceBorder
 import com.example.ui.theme.MaxSurfaceElevated
 import com.example.ui.theme.MaxWarning
 import com.example.ui.theme.TextPrimary
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.example.ui.components.VoiceEnrollmentDialog
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.MaxViewModel
 
@@ -107,6 +112,17 @@ fun DashboardScreen(
     val latestIntruderLog by viewModel.latestIntruderLog.collectAsState()
     val isAntiTheftProcessing by viewModel.isAntiTheftProcessing.collectAsState()
     val isTheftAlarmActive by viewModel.isTheftAlarmActive.collectAsState()
+
+    val enrollmentManager = viewModel.speakerEnrollmentManager
+    val isVoiceEnrolled by enrollmentManager.isEnrolled.collectAsState()
+    var showEnrollmentDialog by remember { mutableStateOf(false) }
+
+    if (showEnrollmentDialog) {
+        VoiceEnrollmentDialog(
+            enrollmentManager = enrollmentManager,
+            onDismiss = { showEnrollmentDialog = false }
+        )
+    }
 
     Column(
         modifier = modifier
@@ -292,6 +308,93 @@ fun DashboardScreen(
                     .weight(1f)
                     .testTag("mode_live_chip")
             )
+        }
+
+        // Voice Enrollment Setup Banner (PART 1 - Owner Voice Lock)
+        Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = if (isVoiceEnrolled) Color(0xFF0F172A) else Color(0xFF1E1436)),
+            border = CardDefaults.outlinedCardBorder().copy(
+                brush = Brush.horizontalGradient(
+                    listOf(
+                        if (isVoiceEnrolled) Color(0xFF00F5FF).copy(alpha = 0.4f) else Color(0xFFA855F7),
+                        if (isVoiceEnrolled) Color(0xFF10B981).copy(alpha = 0.4f) else Color(0xFF00F5FF)
+                    )
+                )
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .testTag("dashboard_voice_enrollment_banner")
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .background(
+                                Brush.linearGradient(
+                                    if (isVoiceEnrolled) listOf(Color(0xFF059669), Color(0xFF0284C7))
+                                    else listOf(Color(0xFF7C3AED), Color(0xFFEC4899))
+                                ),
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Fingerprint,
+                            contentDescription = "Voice Profile",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = if (isVoiceEnrolled) "ओनर वॉयस लॉक: सक्रिय" else "वॉयस एनरोलमेंट सेटअप",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = if (isVoiceEnrolled) "सिर्फ आपकी आवाज़ से कमांड चलेंगे" else "5 छोटे फ्रैसेस बोलकर अपनी आवाज़ लॉक करें",
+                            fontSize = 11.sp,
+                            color = if (isVoiceEnrolled) MaxSuccess else Color(0xFF38BDF8)
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        if (!isVoiceEnrolled) {
+                            enrollmentManager.startNewEnrollment()
+                        }
+                        showEnrollmentDialog = true
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isVoiceEnrolled) Color(0xFF1E293B) else Color(0xFF7C3AED)
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.height(34.dp)
+                ) {
+                    Text(
+                        text = if (isVoiceEnrolled) "री-ट्रेन" else "सेटअप करें",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
         }
 
         // Local First Command Router Info Card
