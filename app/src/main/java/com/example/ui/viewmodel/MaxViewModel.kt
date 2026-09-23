@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.MaxApplication
@@ -238,6 +239,17 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
     fun checkSmsPermission(): Boolean = antiTheftManager.hasSmsPermission()
 
     fun isDeviceAdminActive(): Boolean = antiTheftManager.isDeviceAdminActive()
+
+    fun isScreenLockSet(): Boolean = antiTheftManager.isScreenLockSet()
+
+    fun setFailedAttemptsThreshold(threshold: Int) {
+        viewModelScope.launch {
+            antiTheftManager.setFailedAttemptsThreshold(threshold)
+            val msg = "गलत पासवर्ड लिमिट $threshold बार सेट की गई।"
+            addLog("सुरक्षा लिमिट: $msg")
+            voiceManager.speak(msg, speechRate.value)
+        }
+    }
 
     fun toggleAntiTheft(enable: Boolean) {
         viewModelScope.launch {
@@ -525,7 +537,7 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
                         val fillerJob = viewModelScope.launch {
                             delay(380)
                             if (_isCameraProcessing.value) {
-                                voiceManager.speakInstantFiller("जी, सामने का दृश्य देख रहा हूँ...")
+                                voiceManager.speakInstantFiller("ठीक है, अभी सामने देख रहा हूँ...")
                             }
                         }
 
@@ -654,6 +666,15 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
                 _statusMessage.value = localResult.voiceResponseHindi
                 voiceManager.speak(localResult.voiceResponseHindi, speechRate.value)
 
+                // Special handling for Phone Lock: TTS starts speaking first, then lockNow() locks screen
+                if (localResult.actionType == "LOCK_PHONE") {
+                    addLog("🔒 डिवाइस एडमिन: फोन तुरंत लॉक किया जा रहा है...")
+                    delay(450)
+                    antiTheftManager.lockDeviceNow()
+                    _agentStatus.value = AgentStatus.IDLE
+                    return@launch
+                }
+
                 delay(1800)
                 if (_agentStatus.value == AgentStatus.SPEAKING) {
                     _agentStatus.value = AgentStatus.IDLE
@@ -668,109 +689,122 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
             addLog("जटिल/विजुअल कमांड: समानांतर (Parallel) डेटा और स्क्रीन फेच शुरू...")
             _statusMessage.value = "मैक्स सोच रहा है और स्क्रीन का विश्लेषण कर रहा है..."
 
-            // PARALLEL COROUTINES for zero-latency concurrent context gathering
-            val memoriesDeferred = async(Dispatchers.IO) { repository.getAllMemoriesList() }
-            val recentHistoryDeferred = async(Dispatchers.IO) { repository.getRecentHistoryList(6) }
-            val snapshotDeferred = async(Dispatchers.Default) {
-                if (_useSimulatorMode.value || !isAccessibilityEnabled.value) {
-                    simulatorState.generateSnapshot()
-                } else {
-                    val realSnapshot = MaxAccessibilityService.instance?.captureCurrentScreen()
-                    if (realSnapshot != null && realSnapshot.elements.isNotEmpty()) {
-                        realSnapshot
-                    } else {
+            try {
+                // PARALLEL COROUTINES for zero-latency concurrent context gathering
+                val memoriesDeferred = async(Dispatchers.IO) { repository.getAllMemoriesList() }
+                val recentHistoryDeferred = async(Dispatchers.IO) { repository.getRecentHistoryList(6) }
+                val snapshotDeferred = async(Dispatchers.Default) {
+                    val realService = MaxAccessibilityService.instance
+                    if (realService != null) {
+                        val realSnapshot = realService.captureCurrentScreen()
+                        if (realSnapshot.elements.isNotEmpty() || realSnapshot.packageName.isNotBlank()) {
+                            return@async realSnapshot
+                        }
+                    }
+                    if (_useSimulatorMode.value) {
                         simulatorState.generateSnapshot()
+                    } else {
+                        ScreenSnapshot(packageName = "android", timestamp = System.currentTimeMillis())
                     }
                 }
-            }
 
-            // Build active screen activity context (e.g. "YouTube: Playing Video X")
-            val activeActivityContext: String = if (_useSimulatorMode.value || !isAccessibilityEnabled.value) {
-                val currentVid = simulatorState.currentVideo.value
-                val isAd = simulatorState.isAdActive.value
-                buildString {
-                    append("YouTube Simulator: ")
-                    append("Playing '${currentVid.title}' by ${currentVid.channel}")
-                    if (isAd) append(" (Ad active)")
+                // Build active screen activity context (e.g. "YouTube: Playing Video X")
+                val activeActivityContext: String = if (MaxAccessibilityService.instance != null) {
+                    val currentApp = MaxAccessibilityService.currentPackageName.value
+                    val screenNodes = MaxAccessibilityService.instance?.captureCurrentScreen()?.elements ?: emptyList()
+                    val topTitle = screenNodes.firstOrNull { it.text.length > 5 }?.text ?: ""
+                    if (topTitle.isNotBlank()) "$currentApp ($topTitle)" else currentApp.ifBlank { "Android Home/App" }
+                } else if (_useSimulatorMode.value) {
+                    val currentVid = simulatorState.currentVideo.value
+                    val isAd = simulatorState.isAdActive.value
+                    buildString {
+                        append("YouTube Simulator: ")
+                        append("Playing '${currentVid.title}' by ${currentVid.channel}")
+                        if (isAd) append(" (Ad active)")
+                    }
+                } else {
+                    "Android System"
                 }
-            } else {
-                val currentApp = MaxAccessibilityService.currentPackageName.value
-                val screenNodes = MaxAccessibilityService.instance?.captureCurrentScreen()?.elements ?: emptyList()
-                val topTitle = screenNodes.firstOrNull { it.text.length > 5 }?.text ?: ""
-                if (topTitle.isNotBlank()) "$currentApp ($topTitle)" else currentApp.ifBlank { "Android Home/App" }
-            }
 
-            val recentHistory = recentHistoryDeferred.await()
-            val memories = memoriesDeferred.await()
-            val snapshot = snapshotDeferred.await()
+                val recentHistory = recentHistoryDeferred.await()
+                val memories = memoriesDeferred.await()
+                val snapshot = snapshotDeferred.await()
 
-            // Resolve contextual references (e.g., "wahi wala fir se chalao", "iska volume")
-            val resolvedCommand = MemoryManager.resolveContextualQuery(commandText, recentHistory, activeActivityContext)
-            if (resolvedCommand != commandText) {
-                addLog("संदर्भ समाधान: \"$commandText\" -> \"$resolvedCommand\"")
-            }
-
-            addLog("स्क्रीन पर ${snapshot.elements.size} नोड्स मिले (App: ${snapshot.packageName}) | पैरेलल फेच पूर्ण")
-
-            // Natural conversational filler job if cloud network takes > 380ms
-            var hasReceivedAction = false
-            val fillerJob = launch {
-                delay(380)
-                if (!hasReceivedAction && _agentStatus.value == AgentStatus.THINKING) {
-                    voiceManager.speakInstantFiller("जी, सोचने दीजिए...")
+                // Resolve contextual references (e.g., "wahi wala fir se chalao", "iska volume")
+                val resolvedCommand = MemoryManager.resolveContextualQuery(commandText, recentHistory, activeActivityContext)
+                if (resolvedCommand != commandText) {
+                    addLog("संदर्भ समाधान: \"$commandText\" -> \"$resolvedCommand\"")
                 }
-            }
 
-            // Query Gemini Multimodal AI with Context & Memory (Flash model + LRU Action Cache)
-            val action = geminiClient.decideAction(
-                userCommand = resolvedCommand,
-                screenSnapshot = snapshot,
-                memories = memories,
-                recentHistory = recentHistory,
-                activityContext = activeActivityContext
-            )
-            hasReceivedAction = true
-            fillerJob.cancel()
-            _lastAction.value = action
+                addLog("स्क्रीन पर ${snapshot.elements.size} नोड्स मिले (App: ${snapshot.packageName}) | पैरेलल फेच पूर्ण")
 
-            addLog("एआई निर्णय: ${action.actionType} | कारण: ${action.reasonHindi}")
+                // Natural conversational filler job if cloud network takes > 380ms
+                var hasReceivedAction = false
+                val fillerJob = launch {
+                    delay(380)
+                    if (!hasReceivedAction && _agentStatus.value == AgentStatus.THINKING) {
+                        voiceManager.speakInstantFiller("ठीक है, अभी करता हूँ...")
+                    }
+                }
 
-            // Execute complex UI action and speak in tandem for instant feeling
-            _agentStatus.value = AgentStatus.EXECUTING
-            _statusMessage.value = action.voiceResponseHindi
+                // Query Gemini Multimodal AI with Context & Memory (Flash model + LRU Action Cache)
+                val action = geminiClient.decideAction(
+                    userCommand = resolvedCommand,
+                    screenSnapshot = snapshot,
+                    memories = memories,
+                    recentHistory = recentHistory,
+                    activityContext = activeActivityContext
+                )
+                hasReceivedAction = true
+                fillerJob.cancel()
+                _lastAction.value = action
 
-            // Speak immediately
-            voiceManager.speak(action.voiceResponseHindi, 1.08f)
+                addLog("एआई निर्णय: ${action.actionType} | कारण: ${action.reasonHindi}")
 
-            val execResult = executeAssistantAction(action)
-            addLog("एक्शन परिणाम: ${execResult.message}")
+                // Execute complex UI action and speak in tandem for instant feeling
+                _agentStatus.value = AgentStatus.EXECUTING
+                _statusMessage.value = action.voiceResponseHindi
 
-            // Save to Room database
-            repository.logCommand(
-                prompt = commandText,
-                app = snapshot.packageName.ifBlank { "YouTube" },
-                actionType = action.actionType.name,
-                actionDetails = "${action.targetElementDesc} @ (${action.targetX}, ${action.targetY})",
-                responseHindi = action.voiceResponseHindi,
-                success = execResult.success
-            )
+                // Speak immediately
+                voiceManager.speak(action.voiceResponseHindi, 1.08f)
 
-            // Update user memory and active activity context
-            if (action.textToType.isNotBlank()) {
-                repository.saveMemory("last_played_topic", action.textToType, UserMemoryEntity.CATEGORY_ACTIVITY_CONTEXT, "हाल ही में सर्च/चलाई गई चीज़")
-            }
-            repository.saveActivityContext(
-                app = snapshot.packageName.ifBlank { "YouTube" },
-                contentTitle = action.textToType.ifBlank { action.targetElementDesc }
-            )
+                val execResult = executeAssistantAction(action)
+                addLog("एक्शन परिणाम: ${execResult.message}")
 
-            // Automatic local optimization & cleanup
-            repository.pruneAndOptimizeMemory()
+                // Save to Room database
+                repository.logCommand(
+                    prompt = commandText,
+                    app = snapshot.packageName.ifBlank { "YouTube" },
+                    actionType = action.actionType.name,
+                    actionDetails = "${action.targetElementDesc} @ (${action.targetX}, ${action.targetY})",
+                    responseHindi = action.voiceResponseHindi,
+                    success = execResult.success
+                )
 
-            delay(1600)
-            if (_agentStatus.value == AgentStatus.SPEAKING || _agentStatus.value == AgentStatus.EXECUTING) {
+                // Update user memory and active activity context
+                if (action.textToType.isNotBlank()) {
+                    repository.saveMemory("last_played_topic", action.textToType, UserMemoryEntity.CATEGORY_ACTIVITY_CONTEXT, "हाल ही में सर्च/चलाई गई चीज़")
+                }
+                repository.saveActivityContext(
+                    app = snapshot.packageName.ifBlank { "YouTube" },
+                    contentTitle = action.textToType.ifBlank { action.targetElementDesc }
+                )
+
+                // Automatic local optimization & cleanup
+                repository.pruneAndOptimizeMemory()
+
+                delay(1600)
+                if (_agentStatus.value == AgentStatus.SPEAKING || _agentStatus.value == AgentStatus.EXECUTING) {
+                    _agentStatus.value = AgentStatus.IDLE
+                    _statusMessage.value = "मैक्स तैयार है।"
+                }
+            } catch (e: Exception) {
+                Log.e("MaxViewModel", "Exception during command execution", e)
+                val failureMsg = "माफ़ कीजिये, कमांड पूरा करने में समस्या आई।"
                 _agentStatus.value = AgentStatus.IDLE
-                _statusMessage.value = "मैक्स तैयार है।"
+                _statusMessage.value = "त्रुटि: ${e.message ?: "अज्ञात समस्या"}"
+                addLog("त्रुटि: ${e.localizedMessage ?: "अज्ञात समस्या"}")
+                voiceManager.speak(failureMsg, speechRate.value)
             }
         }
     }
@@ -783,7 +817,7 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val result = when {
-            _useSimulatorMode.value -> {
+            _useSimulatorMode.value && MaxAccessibilityService.instance == null -> {
                 // Execute on simulator
                 when (action.actionType) {
                     ActionType.SKIP_AD -> {
@@ -829,9 +863,19 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
                 if (service != null) {
                     service.executeAction(action)
                 } else {
+                    val appContext = getApplication<MaxApplication>()
+                    val isEnabledInSettings = MaxAccessibilityService.isAccessibilitySettingsEnabled(appContext)
+                    val errorMsg = if (isEnabledInSettings) {
+                        "एक्सेसिबिलिटी सर्विस रीस्टार्ट हो रही है, कृपया पुनः बोलें।"
+                    } else {
+                        "एक्सेसिबिलिटी सर्विस बंद है। कृपया सेटिंग्स में जाकर मैक्स एक्सेसिबिलिटी सर्विस को ऑन करें।"
+                    }
+                    if (!isEnabledInSettings) {
+                        MaxAccessibilityService.openAccessibilitySettings(appContext)
+                    }
                     ExecutionResult(
                         success = false,
-                        message = "एक्सेसिबिलिटी सर्विस चालू नहीं है। सेटिंग्स में जाकर परमिशन दें।",
+                        message = errorMsg,
                         action = action
                     )
                 }

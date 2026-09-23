@@ -527,6 +527,33 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                val isScreenLockSet = viewModel.isScreenLockSet()
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("स्क्रीन लॉक स्थिति (PIN / Pattern / Password):", fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text(if (isScreenLockSet) "सक्रिय (Lock Set on Phone)" else "⚠️ कोई लॉक नहीं लगा है (Set a PIN)", fontSize = 11.sp, color = if (isScreenLockSet) MaxSuccess else Color(0xFFF59E0B))
+                    }
+                    if (!isScreenLockSet) {
+                        Button(
+                            onClick = {
+                                val intent = Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
+                                context.startActivity(intent)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Text("सेट करें", fontSize = 10.sp, color = Color.White)
+                        }
+                    }
+                }
             }
         }
 

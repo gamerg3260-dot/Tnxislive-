@@ -51,15 +51,51 @@ class MaxAccessibilityService : AccessibilityService() {
     }
 
     fun captureCurrentScreen(): ScreenSnapshot {
-        val root = try {
-            rootInActiveWindow
+        val metrics: DisplayMetrics = resources.displayMetrics
+        var root: AccessibilityNodeInfo? = null
+
+        // 1. Try standard rootInActiveWindow
+        try {
+            root = rootInActiveWindow
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get rootInActiveWindow", e)
-            null
+            Log.e(TAG, "[ScreenCapture] Failed to get rootInActiveWindow", e)
         }
 
+        // 2. Fallback to inspecting active / application windows in reverse order (topmost first)
+        if (root == null) {
+            try {
+                val windowList = windows
+                for (window in windowList.reversed()) {
+                    if (window.isActive || window.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) {
+                        val windowRoot = window.root
+                        if (windowRoot != null) {
+                            root = windowRoot
+                            Log.d(TAG, "[ScreenCapture] Found active window root via windows fallback: id=${window.id}, type=${window.type}")
+                            break
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "[ScreenCapture] Fallback window inspection failed", e)
+            }
+        }
+
+        // 3. Force accessibility node refresh to guarantee ZERO STALE DATA
+        try {
+            root?.refresh()
+        } catch (ignored: Exception) {}
+
+        val snapshot = ScreenTreeParser.parseRootNode(root, metrics)
+        Log.i(TAG, "[ScreenFreshness] Fresh screen snapshot captured: Package='${snapshot.packageName}', Elements=${snapshot.elements.size}, Res=${snapshot.screenWidth}x${snapshot.screenHeight}, Timestamp=${snapshot.timestamp}")
+        return snapshot
+    }
+
+    suspend fun performScroll(isDown: Boolean): Boolean {
         val metrics: DisplayMetrics = resources.displayMetrics
-        return ScreenTreeParser.parseRootNode(root, metrics)
+        val centerX = metrics.widthPixels / 2f
+        val startY = if (isDown) metrics.heightPixels * 0.72f else metrics.heightPixels * 0.28f
+        val endY = if (isDown) metrics.heightPixels * 0.28f else metrics.heightPixels * 0.72f
+        return dispatchSwipeGesture(centerX, startY, centerX, endY, 260L)
     }
 
     suspend fun executeAction(action: AssistantAction): ExecutionResult {

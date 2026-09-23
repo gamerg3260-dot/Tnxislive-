@@ -1,9 +1,11 @@
 package com.example.antitheft
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.location.Geocoder
@@ -13,10 +15,14 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.util.Log
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.example.camera.MaxCameraManager
 import com.example.data.local.MaxDatabase
@@ -74,6 +80,50 @@ class AntiTheftManager private constructor(
 
     fun getAdminComponent(): ComponentName = adminComponentName
 
+    /**
+     * Locks the phone immediately using DevicePolicyManager.lockNow().
+     * Requires Device Admin permission.
+     */
+    fun lockDeviceNow(): Boolean {
+        return try {
+            if (isDeviceAdminActive()) {
+                devicePolicyManager.lockNow()
+                Log.i(tag, "✅ Phone screen locked immediately via lockNow().")
+                true
+            } else {
+                Log.w(tag, "⚠️ Cannot lock phone: Device Admin permission is not enabled.")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "❌ Error executing lockNow()", e)
+            false
+        }
+    }
+
+    /**
+     * Checks if device has a secure screen lock (PIN, Pattern, Password) configured.
+     * NOTE: onPasswordFailed() will ONLY trigger when a secure lock screen is present.
+     */
+    fun isDeviceSecure(): Boolean {
+        val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            keyguardManager?.isDeviceSecure == true
+        } else {
+            @Suppress("DEPRECATION")
+            keyguardManager?.isKeyguardSecure == true
+        }
+    }
+
+    fun isScreenLockSet(): Boolean = isDeviceSecure()
+
+    private fun showToast(message: String) {
+        Handler(Looper.getMainLooper()).post {
+            try {
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            } catch (ignored: Exception) {}
+        }
+    }
+
     suspend fun getSettings(): AntiTheftSettingsEntity {
         var current = antiTheftDao.getSettings()
         if (current == null) {
@@ -96,16 +146,23 @@ class AntiTheftManager private constructor(
             trustedContactEmail = email.trim()
         )
         antiTheftDao.saveSettings(updated)
+        Log.i(tag, "Trusted emergency contact saved: ${updated.trustedContactName} (${updated.trustedContactNumber})")
+        showToast("✅ इमरजेंसी कॉन्टैक्ट सेव हुआ: $phone")
     }
 
     suspend fun setAntiTheftEnabled(enabled: Boolean) {
         val current = getSettings()
         antiTheftDao.saveSettings(current.copy(isEnabled = enabled))
+        Log.i(tag, "Anti-Theft Master Switch set to: $enabled")
+        showToast(if (enabled) "🛡️ एंटी-थेफ्ट गार्ड चालू किया गया" else "⚠️ एंटी-थेफ्ट गार्ड बंद किया गया")
     }
 
     suspend fun setFailedAttemptsThreshold(threshold: Int) {
         val current = getSettings()
-        antiTheftDao.saveSettings(current.copy(failedAttemptsThreshold = threshold.coerceIn(1, 5)))
+        val cleanVal = threshold.coerceIn(1, 5)
+        antiTheftDao.saveSettings(current.copy(failedAttemptsThreshold = cleanVal))
+        Log.i(tag, "Failed attempts threshold set to: $cleanVal")
+        showToast("⚙️ अलर्ट थ्रेशोल्ड: $cleanVal प्रयास")
     }
 
     /**
@@ -113,30 +170,43 @@ class AntiTheftManager private constructor(
      */
     suspend fun handlePasswordFailed() = withContext(Dispatchers.IO) {
         val settings = getSettings()
+        val threshold = settings.failedAttemptsThreshold
+        Log.i(tag, "--------------------------------------------------------")
+        Log.w(tag, "🚨 [ON_PASSWORD_FAILED] Wrong PIN/Password attempt detected on device!")
+        Log.i(tag, "Settings status: isEnabled=${settings.isEnabled}, threshold=$threshold, currentFailCount=${settings.currentFailedAttempts}, trustedContact='${settings.trustedContactNumber}'")
+
         if (!settings.isEnabled) {
-            Log.d(tag, "Anti-theft disabled; ignoring password failure.")
+            Log.w(tag, "Anti-Theft is disabled in settings; ignoring failed password attempt.")
             return@withContext
         }
 
         val newFailCount = settings.currentFailedAttempts + 1
         antiTheftDao.updateFailedAttempts(newFailCount)
-        Log.w(tag, "Password failed count: $newFailCount / ${settings.failedAttemptsThreshold}")
+        Log.w(tag, "⚠️ [Attempt Counter] Failed PIN attempt #$newFailCount / $threshold")
+        showToast("⚠️ Max: गलत PIN प्रयास ($newFailCount / $threshold) दर्ज हुआ!")
 
-        if (newFailCount >= settings.failedAttemptsThreshold) {
-            Log.w(tag, "⚠️ INTRUDER DETECTED! Triggering silent front camera & GPS alert...")
+        if (newFailCount >= threshold) {
+            Log.w(tag, "🚨 [INTRUDER DETECTED] Threshold reached ($newFailCount >= $threshold). Launching silent front-camera capture + GPS + SMS...")
+            showToast("🚨 Max Anti-Theft: घुसपैठिया अलर्ट सक्रिय! फोटो व लोकेशन ली जा रही है...")
+
             triggerIntruderAlert(
-                triggerType = "WRONG_PASSWORD_3_TIMES",
-                details = "$newFailCount बार गलत पासवर्ड/पैटर्न दर्ज किया गया"
+                triggerType = "WRONG_PASSWORD_THRESHOLD",
+                details = "$newFailCount बार गलत पासवर्ड/PIN दर्ज किया गया (Threshold: $threshold)"
             )
             // Reset counter after alert
             antiTheftDao.updateFailedAttempts(0)
+        } else {
+            val remaining = threshold - newFailCount
+            Log.i(tag, "ℹ️ Alert will trigger after $remaining more failed attempt(s).")
         }
+        Log.i(tag, "--------------------------------------------------------")
     }
 
     /**
      * Handle successful unlock.
      */
     suspend fun handlePasswordSucceeded() = withContext(Dispatchers.IO) {
+        Log.i(tag, "✅ [PASSWORD_SUCCEEDED] Device unlocked with valid credentials. Resetting failed counter to 0.")
         antiTheftDao.updateFailedAttempts(0)
     }
 
@@ -151,24 +221,46 @@ class AntiTheftManager private constructor(
         val timestamp = System.currentTimeMillis()
         val timeString = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(Date(timestamp))
 
+        Log.i(tag, "================ INTRUDER ALERT INITIATED ================")
+        Log.i(tag, "Trigger Type: $triggerType | Time: $timeString | Details: $details")
+
         // 1. Silent Front Camera Capture
         var photoPath: String? = null
-        if (settings.captureSelfieOnIntruder && cameraManager.hasCameraPermission()) {
-            val captureResult = cameraManager.captureSilentPhoto(isFrontCamera = true)
-            if (captureResult.isSuccess) {
-                val bitmap = captureResult.getOrThrow()
-                photoPath = saveIntruderBitmap(bitmap, timestamp)
-                Log.i(tag, "Intruder photo saved to: $photoPath")
+        if (settings.captureSelfieOnIntruder) {
+            if (cameraManager.hasCameraPermission()) {
+                Log.i(tag, "📸 [Step 1: Photo Capture] Attempting silent front camera selfie...")
+                val captureResult = cameraManager.captureSilentPhoto(isFrontCamera = true)
+                if (captureResult.isSuccess) {
+                    val bitmap = captureResult.getOrThrow()
+                    photoPath = saveIntruderBitmap(bitmap, timestamp)
+                    Log.i(tag, "✅ [Step 1: Photo Capture] SUCCESS: Photo saved to $photoPath")
+                    showToast("📸 घुसपैठिए की गुप्त फोटो ली गई!")
+                } else {
+                    val errorMsg = captureResult.exceptionOrNull()?.message ?: "Camera unavailable"
+                    Log.e(tag, "❌ [Step 1: Photo Capture] FAILED: $errorMsg")
+                    showToast("⚠️ गुप्त फोटो नहीं ली जा सकी: $errorMsg")
+                }
+            } else {
+                Log.w(tag, "⚠️ [Step 1: Photo Capture] SKIPPED: CAMERA permission not granted")
+                showToast("⚠️ कैमरा परमिशन न होने के कारण फोटो नहीं ली जा सकी")
             }
+        } else {
+            Log.i(tag, "ℹ️ [Step 1: Photo Capture] Selfie capture disabled in settings.")
         }
 
         // 2. Fetch High-Accuracy GPS Coordinates
+        Log.i(tag, "📍 [Step 2: Location] Fetching high-accuracy GPS coordinates...")
         val location = fetchCurrentLocation()
         val lat = location?.latitude
         val lng = location?.longitude
         val addressText = if (lat != null && lng != null) {
-            reverseGeocode(lat, lng)
+            val addr = reverseGeocode(lat, lng)
+            Log.i(tag, "✅ [Step 2: Location] SUCCESS: Lat=$lat, Lng=$lng, Address='$addr'")
+            showToast("📍 लोकेशन मिली: ${if (addr.isNotBlank()) addr.take(25) else "$lat, $lng"}")
+            addr
         } else {
+            Log.w(tag, "⚠️ [Step 2: Location] FAILED: Location unavailable (GPS off or weak signal)")
+            showToast("⚠️ GPS लोकेशन प्राप्त नहीं हो सकी")
             "स्थान अनुपलब्ध (GPS off or locating)"
         }
 
@@ -181,17 +273,35 @@ class AntiTheftManager private constructor(
         // 3. Send Silent SMS Alert to Trusted Contact
         var isSmsSent = false
         val contactNumber = settings.trustedContactNumber
-        if (settings.sendSmsOnIntruder && contactNumber.isNotBlank() && hasSmsPermission()) {
-            val alertMessage = buildString {
-                append("⚠️ MAX ANTI-THEFT ALERT!\n")
-                append("फोन में गलत पासवर्ड दर्ज किया गया है।\n")
-                append("समय: $timeString\n")
-                if (lat != null && lng != null) {
-                    append("स्थान: $mapsUrl\n")
-                    if (addressText.isNotBlank()) append("पता: $addressText")
+        if (settings.sendSmsOnIntruder) {
+            if (contactNumber.isNotBlank()) {
+                if (hasSmsPermission()) {
+                    Log.i(tag, "✉️ [Step 3: SMS Alert] Sending emergency alert SMS to: $contactNumber...")
+                    val alertMessage = buildString {
+                        append("⚠️ MAX ANTI-THEFT ALERT!\n")
+                        append("फोन में गलत पासवर्ड दर्ज किया गया है।\n")
+                        append("समय: $timeString\n")
+                        if (lat != null && lng != null) {
+                            append("स्थान: $mapsUrl\n")
+                            if (addressText.isNotBlank()) append("पता: $addressText")
+                        }
+                    }
+                    isSmsSent = sendSilentSms(contactNumber, alertMessage)
+                    if (isSmsSent) {
+                        Log.i(tag, "✅ [Step 3: SMS Alert] SUCCESS: Alert SMS dispatched to $contactNumber")
+                        showToast("🚨 इमरजेंसी SMS भेजा गया ($contactNumber)!")
+                    } else {
+                        Log.e(tag, "❌ [Step 3: SMS Alert] FAILED: Could not send SMS to $contactNumber")
+                        showToast("❌ SMS भेजने में विफल (SIM कार्ड/बैलेंस चेक करें)")
+                    }
+                } else {
+                    Log.w(tag, "⚠️ [Step 3: SMS Alert] SKIPPED: SEND_SMS permission missing")
+                    showToast("⚠️ SMS परमिशन न होने के कारण SMS नहीं भेजा गया")
                 }
+            } else {
+                Log.w(tag, "⚠️ [Step 3: SMS Alert] SKIPPED: No trusted contact number configured in settings.")
+                showToast("ℹ️ इमरजेंसी SMS नहीं भेजा जा सका (कोई नंबर सेट नहीं है)")
             }
-            isSmsSent = sendSilentSms(contactNumber, alertMessage)
         }
 
         // 4. Save to Room Database Log
@@ -208,7 +318,8 @@ class AntiTheftManager private constructor(
         )
 
         antiTheftDao.insertIntruderLog(logEntity)
-        Log.i(tag, "Intruder alert logged successfully: ID=${logEntity.id}")
+        Log.i(tag, "💾 [Step 4: Database] Intruder log saved to Room DB (ID: ${logEntity.id})")
+        Log.i(tag, "==========================================================")
         logEntity
     }
 
@@ -488,3 +599,4 @@ class AntiTheftManager private constructor(
         }
     }
 }
+

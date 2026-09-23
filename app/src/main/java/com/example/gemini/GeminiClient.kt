@@ -511,12 +511,63 @@ class GeminiClient(
             }
         }
 
-        // 3. Generic Play / First Result Tap
+        // 3. Positional / Ordinal Selection ("pehla chat", "doosra gaana", "3rd item", "last", etc.)
+        val ordinalIndex = when {
+            lower.contains("pehla") || lower.contains("first") || lower.contains("1st") || lower.contains("पहला") -> 0
+            lower.contains("doosra") || lower.contains("second") || lower.contains("2nd") || lower.contains("दूसरा") -> 1
+            lower.contains("teesra") || lower.contains("third") || lower.contains("3rd") || lower.contains("तीसरा") -> 2
+            lower.contains("chautha") || lower.contains("fourth") || lower.contains("4th") || lower.contains("चौथा") -> 3
+            lower.contains("paanchva") || lower.contains("fifth") || lower.contains("5th") || lower.contains("पाँचवाँ") -> 4
+            lower.contains("aakhri") || lower.contains("last") || lower.contains("आखिरी") -> -1
+            else -> null
+        }
+
+        if (ordinalIndex != null) {
+            val headerCutoff = (snapshot.screenHeight * 0.14).toInt()
+            val bottomCutoff = (snapshot.screenHeight * 0.88).toInt()
+
+            // Filter actual content nodes in middle screen, sorted strictly top-to-bottom
+            val contentList = snapshot.elements
+                .filter { it.isVisibleToUser && it.isClickable && it.centerY in (headerCutoff + 1)..bottomCutoff && (it.text.isNotBlank() || it.contentDescription.isNotBlank()) }
+                .sortedWith(compareBy<ScreenNode> { it.bounds.top }.thenBy { it.bounds.left })
+
+            val targetNode = if (ordinalIndex == -1) {
+                contentList.lastOrNull()
+            } else if (ordinalIndex in contentList.indices) {
+                contentList[ordinalIndex]
+            } else {
+                contentList.firstOrNull()
+            }
+
+            if (targetNode != null) {
+                val label = targetNode.text.ifBlank { targetNode.contentDescription }.take(30)
+                val posName = when (ordinalIndex) {
+                    0 -> "पहला"
+                    1 -> "दूसरा"
+                    2 -> "तीसरा"
+                    3 -> "चौथा"
+                    4 -> "पाँचवाँ"
+                    -1 -> "आखिरी"
+                    else -> "चुना गया"
+                }
+                return AssistantAction(
+                    actionType = ActionType.TAP,
+                    targetX = targetNode.centerX,
+                    targetY = targetNode.centerY,
+                    targetElementDesc = "Item #$ordinalIndex: $label",
+                    reasonHindi = "स्क्रीन पर विजुअल ऑर्डर में $posName आइटम चुना गया",
+                    voiceResponseHindi = "$posName आइटम \"$label\" खोल रहा हूँ।"
+                )
+            }
+        }
+
+        // 4. Generic Play / First Result Tap
         val isPlayCommand = lower.contains("play") || lower.contains("chalao") || lower.contains("प्ले") || lower.contains("चलाओ") || lower.contains("sunao")
         if (isPlayCommand) {
-            val playCandidate = snapshot.elements.firstOrNull { node ->
-                node.isClickable && node.centerY > (snapshot.screenHeight * 0.20) && (node.text.isNotBlank() || node.contentDescription.isNotBlank())
-            }
+            val playCandidate = snapshot.elements
+                .filter { it.isClickable && it.centerY > (snapshot.screenHeight * 0.16) && (it.text.isNotBlank() || it.contentDescription.isNotBlank()) }
+                .minByOrNull { it.bounds.top }
+
             if (playCandidate != null) {
                 val label = playCandidate.text.ifBlank { playCandidate.contentDescription }.take(30)
                 return AssistantAction(

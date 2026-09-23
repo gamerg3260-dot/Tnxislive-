@@ -1,10 +1,13 @@
 package com.example.ui.components
 
+import android.content.Intent
 import android.graphics.BitmapFactory
+import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,9 +22,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Security
@@ -54,6 +61,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,17 +84,23 @@ import java.util.Locale
 fun AntiTheftCard(
     settings: AntiTheftSettingsEntity?,
     isDeviceAdminActive: Boolean,
+    isScreenLockSet: Boolean,
     latestIntruderLog: IntruderLogEntity?,
     isProcessing: Boolean,
     onToggleEnable: (Boolean) -> Unit,
     onRequestDeviceAdmin: () -> Unit,
-    onSaveTrustedContact: (String, String) -> Unit,
+    onOpenScreenLockSettings: () -> Unit,
+    onSetThreshold: (Int) -> Unit,
+    onSaveTrustedContact: (String, String, String) -> Unit,
     onTestIntruderAlert: () -> Unit,
     onTestSimAlert: () -> Unit,
     onTestSiren: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showEditContactDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val isArmed = (settings?.isEnabled == true) && isDeviceAdminActive && isScreenLockSet && !settings.trustedContactNumber.isNullOrBlank()
 
     Card(
         shape = RoundedCornerShape(20.dp),
@@ -99,7 +113,7 @@ fun AntiTheftCard(
         modifier = modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Header
+            // 1. Header
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -108,7 +122,7 @@ fun AntiTheftCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(38.dp)
                             .background(Color(0xFFEF4444).copy(alpha = 0.2f), RoundedCornerShape(10.dp)),
                         contentAlignment = Alignment.Center
                     ) {
@@ -116,7 +130,7 @@ fun AntiTheftCard(
                             imageVector = Icons.Default.Security,
                             contentDescription = "Anti-Theft Protection",
                             tint = Color(0xFFF87171),
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                     Spacer(modifier = Modifier.width(10.dp))
@@ -129,7 +143,6 @@ fun AntiTheftCard(
                                 color = TextPrimary
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            val isArmed = (settings?.isEnabled == true) && isDeviceAdminActive && !settings.trustedContactNumber.isNullOrBlank()
                             Box(
                                 modifier = Modifier
                                     .background(
@@ -147,7 +160,7 @@ fun AntiTheftCard(
                             }
                         }
                         Text(
-                            text = "3 बार गलत पासवर्ड ➔ साइलेंट सेल्फी + GPS + SMS",
+                            text = "गलत PIN दर्ज ➔ साइलेंट सेल्फी + GPS + SMS अलर्ट",
                             fontSize = 11.sp,
                             color = TextSecondary
                         )
@@ -164,51 +177,208 @@ fun AntiTheftCard(
                 )
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Device Admin Protection Banner
+            // 2. CRITICAL WARNING: Device Admin NOT Enabled
             if (!isDeviceAdminActive) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFF2D1616), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color(0xFFEF4444).copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                        .padding(10.dp)
+                        .background(Color(0xFF331414), RoundedCornerShape(12.dp))
+                        .border(1.dp, Color(0xFFEF4444), RoundedCornerShape(12.dp))
+                        .padding(12.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.AdminPanelSettings,
                         contentDescription = null,
-                        tint = Color(0xFFF87171),
-                        modifier = Modifier.size(22.dp)
+                        tint = Color(0xFFEF4444),
+                        modifier = Modifier.size(24.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "डिवाइस एडमिन परमिशन दें",
+                            text = "डिवाइस एडमिन परमिशन आवश्यक है!",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFFF87171)
+                            color = Color(0xFFFCA5A5)
                         )
                         Text(
-                            text = "गलत लॉकस्क्रीन पासवर्ड पकड़ने हेतु आवश्यक",
+                            text = "Settings → Security → Device Admin में Max को ON करें ताकि गलत PIN पकड़ सके।",
                             fontSize = 10.sp,
-                            color = TextSecondary
+                            color = TextSecondary,
+                            lineHeight = 13.sp
                         )
                     }
+                    Spacer(modifier = Modifier.width(6.dp))
                     Button(
                         onClick = onRequestDeviceAdmin,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(32.dp)
+                        modifier = Modifier.height(34.dp)
                     ) {
                         Text("सक्रिय करें", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 }
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
             }
 
-            // Emergency Trusted Contact Section
+            // 3. CRITICAL WARNING: Screen Lock (PIN/Pattern) NOT Set on Device
+            if (!isScreenLockSet) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF302008), RoundedCornerShape(12.dp))
+                        .border(1.dp, Color(0xFFF59E0B), RoundedCornerShape(12.dp))
+                        .padding(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = Color(0xFFF59E0B),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "स्क्रीन लॉक (PIN/Pattern) सेट नहीं है!",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFDE68A)
+                        )
+                        Text(
+                            text = "फोन में कोई लॉक नहीं लगा है। 'गलत PIN' फीचर के लिए फोन में स्क्रीन लॉक होना आवश्यक है।",
+                            fontSize = 10.sp,
+                            color = TextSecondary,
+                            lineHeight = 13.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Button(
+                        onClick = onOpenScreenLockSettings,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("लॉक लगाएं", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
+            // 4. Security Status Diagnostic Badges
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF131024), RoundedCornerShape(10.dp))
+                    .padding(8.dp),
+                horizontalArrangement = Arrangement.SpaceAround
+            ) {
+                // Admin Status
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (isDeviceAdminActive) Icons.Default.CheckCircle else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = if (isDeviceAdminActive) MaxSuccess else Color(0xFFEF4444),
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (isDeviceAdminActive) "Device Admin: On" else "Admin: Off",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isDeviceAdminActive) MaxSuccess else Color(0xFFEF4444)
+                    )
+                }
+
+                // Lockscreen Status
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (isScreenLockSet) Icons.Default.CheckCircle else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = if (isScreenLockSet) MaxSuccess else Color(0xFFF59E0B),
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (isScreenLockSet) "Screen Lock: Set" else "Lock: None",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isScreenLockSet) MaxSuccess else Color(0xFFF59E0B)
+                    )
+                }
+
+                // Contact Status
+                val hasContact = !settings?.trustedContactNumber.isNullOrBlank()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (hasContact) Icons.Default.CheckCircle else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = if (hasContact) MaxSuccess else MaxWarning,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (hasContact) "SMS Alert: Ready" else "No Contact",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (hasContact) MaxSuccess else MaxWarning
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 5. Wrong PIN Threshold Selector (1, 2, 3 attempts)
+            val currentThreshold = settings?.failedAttemptsThreshold ?: 1
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF16122C), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Column {
+                    Text(
+                        text = "कितने गलत प्रयास पर अलर्ट भेजें?",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "तत्काल टेस्टिंग के लिए '1 बार' चुनें",
+                        fontSize = 9.sp,
+                        color = TextSecondary
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(1, 2, 3).forEach { count ->
+                        val isSelected = currentThreshold == count
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) Color(0xFFEF4444) else Color(0xFF231F3D))
+                                .clickable { onSetThreshold(count) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "$count बार",
+                                fontSize = 10.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) Color.White else TextSecondary
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 6. Emergency Trusted Contact & Email Section
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -230,14 +400,14 @@ fun AntiTheftCard(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "इमरजेंसी कॉन्टैक्ट (SMS अलर्ट हेतु):",
-                            fontSize = 11.sp,
+                            text = "इमरजेंसी ट्रस्टेड कॉन्टैक्ट (SMS/Email):",
+                            fontSize = 10.sp,
                             color = TextSecondary
                         )
                         val contactNum = settings?.trustedContactNumber
                         if (contactNum.isNullOrBlank()) {
                             Text(
-                                text = "कोई नंबर सेट नहीं है (क्लिक कर जोड़ें)",
+                                text = "नंबर जोड़ें (क्लिक करें)",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaxWarning
@@ -249,6 +419,13 @@ fun AntiTheftCard(
                                 fontWeight = FontWeight.Bold,
                                 color = TextPrimary
                             )
+                            if (!settings.trustedContactEmail.isNullOrBlank()) {
+                                Text(
+                                    text = "ईमेल: ${settings.trustedContactEmail}",
+                                    fontSize = 10.sp,
+                                    color = MaxSecondary
+                                )
+                            }
                         }
                     }
                 }
@@ -261,9 +438,9 @@ fun AntiTheftCard(
                 }
             }
 
-            // Latest Intruder Incident Display
+            // 7. Latest Intruder Incident Display
             if (latestIntruderLog != null) {
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -286,7 +463,7 @@ fun AntiTheftCard(
                                 color = Color(0xFFFCA5A5)
                             )
                         }
-                        val timeStr = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(latestIntruderLog.timestamp))
+                        val timeStr = SimpleDateFormat("dd MMM, HH:mm:ss", Locale.getDefault()).format(Date(latestIntruderLog.timestamp))
                         Text(text = timeStr, fontSize = 10.sp, color = TextSecondary)
                     }
 
@@ -343,9 +520,9 @@ fun AntiTheftCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Action & Test Buttons
+            // 8. Action & Test Buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -355,14 +532,14 @@ fun AntiTheftCard(
                     enabled = !isProcessing,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1.2f).height(40.dp)
+                    modifier = Modifier.weight(1.3f).height(40.dp)
                 ) {
                     if (isProcessing) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                     } else {
                         Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("गलत पासवर्ड टेस्ट", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("गलत PIN लाइव टेस्ट", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -375,7 +552,7 @@ fun AntiTheftCard(
                 ) {
                     Icon(Icons.Default.SimCard, contentDescription = null, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("SIM चेंज टेस्ट", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("SIM टेस्ट", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
 
                 OutlinedButton(
@@ -391,7 +568,7 @@ fun AntiTheftCard(
 
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "💡 रिमोट कमांड्स: दूसरे फोन से SMS भेजें: 'MAX LOCATE' (लोकेशन), 'MAX LOCK' (रिमोट लॉक), 'MAX SIREN' (अलार्म)।",
+                text = "💡 रिमोट सुरक्षा SMS कमांड्स: 'MAX LOCATE' (लोकेशन), 'MAX LOCK' (रिमोट लॉक), 'MAX SIREN' (अलार्म)।",
                 fontSize = 10.sp,
                 color = TextSecondary,
                 lineHeight = 14.sp
@@ -399,10 +576,11 @@ fun AntiTheftCard(
         }
     }
 
-    // Edit Trusted Contact Dialog
+    // Edit Trusted Contact & Email Dialog
     if (showEditContactDialog) {
-        var inputName by remember { mutableStateOf(settings?.trustedContactName ?: "") }
+        var inputName by remember { mutableStateOf(settings?.trustedContactName ?: "Emergency Contact") }
         var inputPhone by remember { mutableStateOf(settings?.trustedContactNumber ?: "") }
+        var inputEmail by remember { mutableStateOf(settings?.trustedContactEmail ?: "") }
 
         AlertDialog(
             onDismissRequest = { showEditContactDialog = false },
@@ -410,7 +588,7 @@ fun AntiTheftCard(
             text = {
                 Column {
                     Text(
-                        "जब कोई गलत पासवर्ड डालेगा या सिम बदलेगा, तो मैक्स इस नंबर पर साइलेंट SMS भेजेगा।",
+                        "जब कोई गलत पासवर्ड डालेगा या सिम बदलेगा, तो मैक्स इस नंबर पर साइलेंट SMS व अलर्ट भेजेगा।",
                         fontSize = 12.sp,
                         color = TextSecondary
                     )
@@ -426,8 +604,17 @@ fun AntiTheftCard(
                     OutlinedTextField(
                         value = inputPhone,
                         onValueChange = { inputPhone = it },
-                        label = { Text("मोबाइल नंबर (Mobile Number)") },
+                        label = { Text("मोबाइल नंबर (SMS हेतु)") },
                         placeholder = { Text("+919876543210") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = inputEmail,
+                        onValueChange = { inputEmail = it },
+                        label = { Text("ईमेल एड्रेस (वैकल्पिक)") },
+                        placeholder = { Text("alert@example.com") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -436,7 +623,7 @@ fun AntiTheftCard(
             confirmButton = {
                 Button(
                     onClick = {
-                        onSaveTrustedContact(inputName, inputPhone)
+                        onSaveTrustedContact(inputName, inputPhone, inputEmail)
                         showEditContactDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaxPrimary)

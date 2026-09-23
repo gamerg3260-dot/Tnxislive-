@@ -425,6 +425,7 @@ fun DashboardScreen(
         AntiTheftCard(
             settings = antiTheftSettings,
             isDeviceAdminActive = viewModel.isDeviceAdminActive(),
+            isScreenLockSet = viewModel.isScreenLockSet(),
             latestIntruderLog = latestIntruderLog,
             isProcessing = isAntiTheftProcessing,
             onToggleEnable = { viewModel.toggleAntiTheft(it) },
@@ -435,8 +436,15 @@ fun DashboardScreen(
                 }
                 context.startActivity(intent)
             },
-            onSaveTrustedContact = { name, phone ->
-                viewModel.saveTrustedContact(name, phone)
+            onOpenScreenLockSettings = {
+                val intent = Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
+                context.startActivity(intent)
+            },
+            onSetThreshold = { count ->
+                viewModel.setFailedAttemptsThreshold(count)
+            },
+            onSaveTrustedContact = { name, phone, email ->
+                viewModel.saveTrustedContact(name, phone, email)
             },
             onTestIntruderAlert = { viewModel.testIntruderAlert() },
             onTestSimAlert = { viewModel.testSimAlert() },

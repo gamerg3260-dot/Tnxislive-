@@ -34,8 +34,19 @@ object GeminiPromptBuilder {
                - When performing TAP, DOUBLE_TAP, LONG_PRESS, or TYPE, always supply the exact centerX, centerY of the corresponding element.
                - For typing/searching, set actionType="TYPE", textToType="...", and the target input field's centerX, centerY.
 
-            4. Language & Tone:
-               - Always output natural, respectful, and helpful Hindi for voiceResponseHindi and reasonHindi.
+            4. ORDINAL & POSITION ACCURACY (CRITICAL FOR "PEHLA / DOOSRA / TEESRA"):
+               - When the user asks for a position/ordinal like "pehla / first / 1st", "doosra / second / 2nd", "teesra / third / 3rd", "chautha / fourth / 4th", "paanchva / fifth / 5th", "aakhri / last":
+                 1. Look directly at the 'MAIN CONTENT LIST ITEMS' section in the prompt.
+                 2. The items in that section are strictly sorted in top-to-bottom visual reading order on the screen with explicit ordinal tags: [1st / Pehla (पहला)], [2nd / Doosra (दूसरा)], [3rd / Teesra (तीसरा)], etc.
+                 3. Screen visual position is priority: NEVER pick header search bars or top app titles when the user asks for "pehla chat" or "pehla video". Always pick the actual content item matching that visual index.
+                 4. Always pick the exact centerX and centerY of that corresponding visual item.
+                 5. IN 'voiceResponseHindi', ALWAYS CLEARLY CONFIRM THE NAME/TITLE OF THE SELECTED ITEM:
+                    - For example: "[Item Name] खोल रहा हूँ।" or "[Item Name] वाली चैट खोल रहा हूँ।" or "[Title] चला रहा हूँ।".
+                    - This confirms the action so the user immediately knows the correct element was targeted.
+
+            5. Language & Tone:
+               - Always output natural, respectful, confident, and action-oriented Hindi for voiceResponseHindi and reasonHindi.
+               - Never sound confused or say "main soch raha hoon". Always be clear and prompt.
 
             Return ONLY valid JSON matching this schema:
             {

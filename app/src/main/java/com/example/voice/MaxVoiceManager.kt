@@ -258,10 +258,10 @@ class MaxVoiceManager(
     }
 
     /**
-     * Instant conversational filler (e.g., "जी, देख रहा हूँ...", "सोचने दीजिए...")
-     * played when cloud network latency exceeds 400ms to eliminate awkward dead silence.
+     * Action-oriented conversational filler (e.g., "ठीक है, अभी करता हूँ...", "जी, तुरंत कर रहा हूँ...")
+     * played ONLY when Gemini cloud API network latency exceeds 380ms to provide responsive feedback.
      */
-    fun speakInstantFiller(fillerText: String = "जी, एक सेकंड...", speechRate: Float = 1.15f) {
+    fun speakInstantFiller(fillerText: String = "ठीक है, अभी करता हूँ...", speechRate: Float = 1.15f) {
         if (!isTtsReady || _isSpeaking.value) return
         _isSpeaking.value = true
         textToSpeech?.setSpeechRate(speechRate)

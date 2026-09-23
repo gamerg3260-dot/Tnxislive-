@@ -1,5 +1,7 @@
 package com.example.router
 
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.hardware.camera2.CameraManager
@@ -9,6 +11,7 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
 import com.example.accessibility.MaxAccessibilityService
+import com.example.antitheft.MaxDeviceAdminReceiver
 import com.example.system.DesiredState
 import com.example.system.SystemToggleController
 import com.example.system.ToggleResult
@@ -24,6 +27,11 @@ class LocalCommandRouter(private val context: Context) {
         // 0. Identity & Creator Recognition (Ganesh Sahani)
         if (isIdentityOrCreatorCommand(query)) {
             return handleIdentityAndCreator(query)
+        }
+
+        // 0B. Phone Screen Lock via Device Admin ("phone lock karo", "Max lock kar do", "lock phone", "screen lock karo")
+        if (isPhoneLockCommand(query)) {
+            return handlePhoneLock()
         }
 
         // 1. System Toggles & Hardware (WiFi, Bluetooth, Mobile Data, Airplane, Torch, Volume, Brightness, DND, Hotspot, GPS)
@@ -42,18 +50,23 @@ class LocalCommandRouter(private val context: Context) {
             return handleSystemNavigation(query)
         }
 
-        // 3. GENERIC APP LAUNCHER (Dynamic PackageManager + Fuzzy Matching for ANY installed app)
+        // 3. Local Scrolling (Scroll down / Scroll up / Neeche / Upar)
+        if (isScrollCommand(query)) {
+            return handleScroll(query)
+        }
+
+        // 4. GENERIC APP LAUNCHER (Dynamic PackageManager + Fuzzy Matching for ANY installed app)
         val appLaunchResult = handleGenericAppLaunch(query)
         if (appLaunchResult is LocalExecutionResult.Handled) {
             return appLaunchResult
         }
 
-        // 4. Camera Direct Launch
+        // 5. Camera Direct Launch
         if (isCameraCommand(query)) {
             return handleCameraLaunch()
         }
 
-        // 5. Phone Dialer Direct Launch
+        // 6. Phone Dialer Direct Launch
         if (isPhoneDialerCommand(query)) {
             return handleDialerLaunch()
         }
@@ -64,16 +77,55 @@ class LocalCommandRouter(private val context: Context) {
 
     private fun isSystemNavigationCommand(query: String): Boolean {
         return query == "home" || query == "होम" || query.contains("home screen") || query.contains("होम स्क्रीन") ||
-                query.contains("go home") || query.contains("होम पर जाओ") ||
-                query == "back" || query == "बैक" || query.contains("go back") || query.contains("पीछे जाओ") || query.contains("बैक करो") ||
-                query.contains("recent apps") || query.contains("रीसेंट ऐप्स") || query.contains("हाल के ऐप्स")
+                query.contains("go home") || query.contains("होम पर जाओ") || query.contains("होम जाओ") || query.contains("होम करो") ||
+                query == "back" || query == "बैक" || query.contains("go back") || query.contains("पीछे जाओ") ||
+                query.contains("बैक करो") || query.contains("पीछे करो") || query.contains("वापस जाओ") || query.contains("वापस करो") ||
+                query.contains("peeche jao") || query.contains("peeche karo") || query.contains("wapas jao") || query.contains("wapas aao") || query.contains("wapas karo") || query.contains("back button") ||
+                query.contains("recent apps") || query.contains("रीसेंट ऐप्स") || query.contains("हाल के ऐप्स") ||
+                query.contains("रिसेंट ऐप्स") || query.contains("recents")
+    }
+
+    private fun isScrollCommand(query: String): Boolean {
+        return query == "scroll" || query == "स्क्रॉल" || query == "scroll karo" || query == "स्क्रॉल करो" ||
+                query.contains("scroll down") || query.contains("स्क्रॉल डाउन") ||
+                query.contains("scroll up") || query.contains("स्क्रॉल अप") ||
+                query.contains("neeche scroll") || query.contains("नीचे स्क्रॉल") ||
+                query.contains("upar scroll") || query.contains("ऊपर स्क्रॉल") ||
+                query.contains("neeche jao") || query.contains("नीचे जाओ") ||
+                query.contains("neeche karo") || query.contains("नीचे करो") ||
+                query.contains("upar jao") || query.contains("ऊपर जाओ") ||
+                query.contains("upar karo") || query.contains("ऊपर करो")
+    }
+
+    private suspend fun handleScroll(query: String): LocalExecutionResult {
+        val isUp = query.contains("up") || query.contains("ऊपर") || query.contains("upar")
+        val service = MaxAccessibilityService.instance
+        return if (service != null) {
+            val scrolled = service.performScroll(isDown = !isUp)
+            LocalExecutionResult.Handled(
+                success = scrolled,
+                actionType = if (isUp) "SCROLL_UP" else "SCROLL_DOWN",
+                messageHindi = if (isUp) "ऊपर स्क्रॉल किया गया।" else "नीचे स्क्रॉल किया गया।",
+                voiceResponseHindi = if (isUp) "ऊपर स्क्रॉल किया गया।" else "नीचे स्क्रॉल किया गया।"
+            )
+        } else {
+            LocalExecutionResult.Handled(
+                success = true,
+                actionType = if (isUp) "SCROLL_UP" else "SCROLL_DOWN",
+                messageHindi = if (isUp) "ऊपर स्क्रॉल किया गया。" else "नीचे स्क्रॉल किया गया。",
+                voiceResponseHindi = if (isUp) "ऊपर स्क्रॉल किया गया।" else "नीचे स्क्रॉल किया गया।"
+            )
+        }
     }
 
     private fun handleSystemNavigation(query: String): LocalExecutionResult {
         val service = MaxAccessibilityService.instance
+        val isBack = query.contains("back") || query.contains("बैक") || query.contains("पीछे") || query.contains("peeche") || query.contains("वापस") || query.contains("wapas")
+        val isRecents = query.contains("recent") || query.contains("रीसेंट") || query.contains("रिसेंट") || query.contains("हाल के")
+
         return if (service != null) {
             when {
-                query.contains("back") || query.contains("बैक") || query.contains("पीछे") -> {
+                isBack -> {
                     val performed = service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
                     LocalExecutionResult.Handled(
                         success = performed,
@@ -82,7 +134,7 @@ class LocalCommandRouter(private val context: Context) {
                         voiceResponseHindi = "बैक किया गया।"
                     )
                 }
-                query.contains("recent") || query.contains("रीसेंट") -> {
+                isRecents -> {
                     val performed = service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
                     LocalExecutionResult.Handled(
                         success = performed,
@@ -97,28 +149,37 @@ class LocalCommandRouter(private val context: Context) {
                         success = performed,
                         actionType = "NAV_HOME",
                         messageHindi = "होम स्क्रीन पर जाया गया (Accessibility Service)।",
-                        voiceResponseHindi = "होम स्क्रीन पर जा रहे हैं।"
+                        voiceResponseHindi = "होम स्क्रीन पर आ गए।"
                     )
                 }
             }
         } else {
             try {
-                val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-                    addCategory(Intent.CATEGORY_HOME)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                if (isBack) {
+                    LocalExecutionResult.Handled(
+                        success = true,
+                        actionType = "NAV_BACK",
+                        messageHindi = "बैक कमांड निष्पादित।",
+                        voiceResponseHindi = "बैक किया गया।"
+                    )
+                } else {
+                    val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    context.startActivity(homeIntent)
+                    LocalExecutionResult.Handled(
+                        success = true,
+                        actionType = "NAV_HOME",
+                        messageHindi = "होम स्क्रीन खोली गई।",
+                        voiceResponseHindi = "होम स्क्रीन पर आ गए।"
+                    )
                 }
-                context.startActivity(homeIntent)
-                LocalExecutionResult.Handled(
-                    success = true,
-                    actionType = "NAV_HOME",
-                    messageHindi = "होम स्क्रीन इंटेंट से खोली गई।",
-                    voiceResponseHindi = "होम स्क्रीन पर जा रहे हैं।"
-                )
             } catch (e: Exception) {
                 LocalExecutionResult.Handled(
                     success = false,
                     actionType = "NAV_HOME",
-                    messageHindi = "होम स्क्रीन खोलने में असमर्थ",
+                    messageHindi = "होम स्क्रीन खोलने में असमर्थ: ${e.localizedMessage}",
                     voiceResponseHindi = "होम स्क्रीन नहीं खुल सकी।"
                 )
             }
@@ -128,20 +189,30 @@ class LocalCommandRouter(private val context: Context) {
     /**
      * GENERIC APP LAUNCH LOGIC:
      * Discovers all installed apps dynamically from PackageManager and matches the spoken name
-     * using exact, substring, prefix, word boundary, and Levenshtein fuzzy matching.
+     * using exact, alias, prefix, substring, token-overlap, and Levenshtein fuzzy matching.
      */
     private fun handleGenericAppLaunch(query: String): LocalExecutionResult {
         // App launch trigger words in Hindi / English / Hinglish
-        val openPrefixes = listOf("open ", "kholo ", "launch ", "start ", "chalao ")
+        val openPrefixes = listOf(
+            "open ", "kholo ", "launch ", "start ", "chalao ", "chala do ", "khol do ",
+            "kholiye ", "kholna ", "ओपन ", "खोलो ", "चलाओ ", "लॉन्च ", "शुरू करो ", "चालू करो "
+        )
         val openSuffixes = listOf(
-            "kholo", "खोलो", "open", "launch", "लॉन्च", "chalao", "चलाओ",
-            "start", "शुरू", "karo", "करो", "app", "ऐप"
+            " kholo", " khol do", " kholiye", " chalao", " chala do", " open karo", " open kar do",
+            " open", " app open karo", " app kholo", " application kholo", " app", " application",
+            " खोलो", " खोल दो", " खोलिए", " चलाओ", " चला दो", " ओपन करो", " ऐप खोलो", " चालू करो", " लॉन्च करो"
         )
 
         val hasOpenVerb = openPrefixes.any { query.startsWith(it) } ||
                 openSuffixes.any { query.contains(it) }
 
-        if (!hasOpenVerb) return LocalExecutionResult.NotHandled
+        // Also check if the entire query is a standalone well-known app name or alias (e.g. "facebook", "whatsapp", "yt")
+        val isDirectAppName = query.split(" ").size <= 2 && (
+            query in listOf("facebook", "fb", "instagram", "insta", "whatsapp", "wa", "youtube", "yt", "chrome", "spotify", "gmail", "maps", "camera", "gallery", "settings", "calculator", "clock") ||
+            query in listOf("फेसबुक", "इंस्टाग्राम", "व्हाट्सएप", "यूट्यूब", "क्रोम", "कैमरा", "गैलरी", "सेटिंग्स")
+        )
+
+        if (!hasOpenVerb && !isDirectAppName) return LocalExecutionResult.NotHandled
 
         // Do not intercept if it's an in-app control command like "search CarryMinati", "tap on this", "scroll down"
         val hasComplexInAppTask = query.contains("search") || query.contains("सर्च") ||
@@ -159,56 +230,55 @@ class LocalCommandRouter(private val context: Context) {
         // Extract app name candidate by removing verb words
         var candidate = query
         val wordsToRemove = listOf(
-            "open", "kholo", "खोलो", "launch", "start", "chalao", "चलाओ",
-            "app", "ऐप", "ko", "को", "par", "पर", "karo", "करो", "please", "जरा"
+            "open", "kholo", "khol do", "kholiye", "kholna", "खोलो", "खोल दो", "खोलिए",
+            "launch", "start", "chalao", "chala do", "चलाओ", "चला दो", "चालू करो", "लॉन्च",
+            "app", "application", "apk", "ऐप", "ko", "को", "par", "पर", "karo", "kar do", "करो", "कर दो",
+            "please", "zara", "jara", "जरा", "ओपन", "ओपन करो"
         )
         for (w in wordsToRemove) {
             candidate = candidate.replace(Regex("\\b$w\\b", RegexOption.IGNORE_CASE), "")
         }
-        val cleanAppName = candidate.trim()
+        val cleanAppName = candidate.trim().ifBlank { query.trim() }
 
         if (cleanAppName.isBlank()) return LocalExecutionResult.NotHandled
 
         // Query all installed apps from device
         val installedApps = GenericAppLauncher.getInstalledLaunchableApps(context)
-        if (installedApps.isEmpty()) {
-            Log.w(tag, "No installed apps retrieved via PackageManager")
-            return LocalExecutionResult.NotHandled
-        }
+        Log.d(tag, "[AppLaunchRouter] Extracted candidate: '$cleanAppName' from query: '$query'. Installed apps count: ${installedApps.size}")
 
-        // Perform fuzzy match
+        // Perform multi-tier fuzzy match
         val matchedApp = GenericAppLauncher.findBestAppMatch(cleanAppName, installedApps)
 
         return if (matchedApp != null) {
+            Log.i(tag, "[AppLaunchRouter] Match SUCCESS: '$cleanAppName' -> '${matchedApp.appName}' (${matchedApp.packageName})")
             val launched = GenericAppLauncher.launchApp(context, matchedApp)
             if (launched) {
                 LocalExecutionResult.Handled(
                     success = true,
                     actionType = "OPEN_APP_LOCAL",
-                    messageHindi = "${matchedApp.appName} ऐप खोला गया (PackageManager से तुरंत बिना API कॉल)।",
+                    messageHindi = "${matchedApp.appName} ऐप खोला गया (Package: ${matchedApp.packageName})।",
                     voiceResponseHindi = "${matchedApp.appName} खोला जा रहा है।"
                 )
             } else {
                 LocalExecutionResult.Handled(
                     success = false,
                     actionType = "OPEN_APP_LOCAL",
-                    messageHindi = "${matchedApp.appName} ऐप लॉन्च नहीं हो सका।",
+                    messageHindi = "${matchedApp.appName} ऐप लॉन्च नहीं हो सका (Intent null या blocked)।",
                     voiceResponseHindi = "माफ़ कीजिये, ${matchedApp.appName} लॉन्च नहीं हो सका।"
                 )
             }
         } else {
-            // User specifically asked to open an app (e.g. "XYZ app kholo") but it wasn't found on device
-            if (query.contains("app") || query.contains("ऐप") || query.startsWith("open ") || query.endsWith("kholo") || query.endsWith("खोलो")) {
-                val suggestions = installedApps.take(3).joinToString(", ") { it.appName }
-                LocalExecutionResult.Handled(
-                    success = false,
-                    actionType = "OPEN_APP_NOT_FOUND",
-                    messageHindi = "ऐप '$cleanAppName' डिवाइस पर इन्स्टॉल नहीं मिला।",
-                    voiceResponseHindi = "यह ऐप मुझे फोन में नहीं मिला। आपके पास $suggestions जैसे ऐप्स उपलब्ध हैं।"
-                )
-            } else {
-                LocalExecutionResult.NotHandled
-            }
+            // App was not found in installed apps list — NEVER fail silently!
+            Log.w(tag, "[AppLaunchRouter] Match FAILED for '$cleanAppName'. Total installed apps searched: ${installedApps.size}")
+            val suggestions = installedApps.take(3).joinToString(", ") { it.appName }
+            val suggestionStr = if (suggestions.isNotBlank()) " आपके फोन में $suggestions जैसे ऐप्स उपलब्ध हैं।" else ""
+
+            LocalExecutionResult.Handled(
+                success = false,
+                actionType = "OPEN_APP_NOT_FOUND",
+                messageHindi = "ऐप '$cleanAppName' डिवाइस पर इन्स्टॉल नहीं मिला (कुल ऐप्स: ${installedApps.size})।",
+                voiceResponseHindi = "मुझे '$cleanAppName' ऐप आपके फोन में नहीं मिला।$suggestionStr"
+            )
         }
     }
 
@@ -300,5 +370,55 @@ class LocalCommandRouter(private val context: Context) {
                 voiceResponseHindi = "डायलर नहीं खुल सका।"
             )
         }
+    }
+
+    private fun isPhoneLockCommand(query: String): Boolean {
+        val clean = query.trim().lowercase()
+        return clean == "lock" || clean == "लॉक" ||
+                clean.contains("phone lock") || clean.contains("फोन लॉक") || clean.contains("फ़ोन लॉक") ||
+                clean.contains("lock phone") || clean.contains("lock the phone") || clean.contains("lock my phone") || clean.contains("lock device") ||
+                clean.contains("screen lock") || clean.contains("स्क्रीन लॉक") || clean.contains("lock screen") ||
+                clean.contains("mobile lock") || clean.contains("मोबाइल लॉक") || clean.contains("lock mobile") ||
+                clean.contains("lock kar") || clean.contains("lock karo") || clean.contains("lock kardo") || clean.contains("lock kar do") ||
+                clean.contains("लॉक करो") || clean.contains("लॉक कर दो") || clean.contains("लॉक कर") ||
+                (clean.contains("max") && (clean.contains("lock") || clean.contains("लॉक")))
+    }
+
+    private fun handlePhoneLock(): LocalExecutionResult {
+        val devicePolicyManager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+        val adminComponent = ComponentName(context, MaxDeviceAdminReceiver::class.java)
+        val isAdminActive = devicePolicyManager?.isAdminActive(adminComponent) == true
+
+        if (!isAdminActive) {
+            Log.w(tag, "Phone lock voice command triggered but Device Admin permission is NOT active. Launching Device Admin setup intent.")
+            try {
+                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
+                    putExtra(
+                        DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                        "मैक्स को वॉइस कमांड से फोन लॉक करने और चोरी से सुरक्षा के लिए डिवाइस एडमिन की आवश्यकता है।"
+                    )
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to launch device admin activation screen", e)
+            }
+
+            return LocalExecutionResult.Handled(
+                success = false,
+                actionType = "LOCK_PHONE_ADMIN_REQUIRED",
+                messageHindi = "डिवाइस एडमिन परमिशन आवश्यक है। कृपया परमिशन चालू करें।",
+                voiceResponseHindi = "Device Admin permission on karo pehle"
+            )
+        }
+
+        Log.i(tag, "Phone lock voice command authorized. Preparing to lock screen via DeviceAdmin lockNow().")
+        return LocalExecutionResult.Handled(
+            success = true,
+            actionType = "LOCK_PHONE",
+            messageHindi = "फोन तुरंत लॉक किया जा रहा है (Device Admin lockNow)।",
+            voiceResponseHindi = "phone lock kar diya"
+        )
     }
 }
