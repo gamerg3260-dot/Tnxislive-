@@ -12,6 +12,7 @@ import android.provider.Settings
 import android.util.Log
 import com.example.accessibility.MaxAccessibilityService
 import com.example.antitheft.MaxDeviceAdminReceiver
+import com.example.antitheft.TheftAlarmManager
 import com.example.system.DesiredState
 import com.example.system.SystemToggleController
 import com.example.system.ToggleResult
@@ -32,6 +33,14 @@ class LocalCommandRouter(private val context: Context) {
         // 0B. Phone Screen Lock via Device Admin ("phone lock karo", "Max lock kar do", "lock phone", "screen lock karo")
         if (isPhoneLockCommand(query)) {
             return handlePhoneLock()
+        }
+
+        // 0C. Dedicated Emergency Theft Siren ("chori alarm bajao", "siren bajao", "alarm band karo", "stop siren")
+        if (isTheftAlarmStartCommand(query)) {
+            return handleTheftAlarmStart()
+        }
+        if (isTheftAlarmStopCommand(query)) {
+            return handleTheftAlarmStop()
         }
 
         // 1. System Toggles & Hardware (WiFi, Bluetooth, Mobile Data, Airplane, Torch, Volume, Brightness, DND, Hotspot, GPS)
@@ -419,6 +428,45 @@ class LocalCommandRouter(private val context: Context) {
             actionType = "LOCK_PHONE",
             messageHindi = "फोन तुरंत लॉक किया जा रहा है (Device Admin lockNow)।",
             voiceResponseHindi = "phone lock kar diya"
+        )
+    }
+
+    private fun isTheftAlarmStartCommand(query: String): Boolean {
+        val clean = query.trim().lowercase()
+        return clean.contains("chori alarm") || clean.contains("चोरी अलार्म") ||
+                clean.contains("emergency alarm") || clean.contains("इमरजेंसी अलार्म") ||
+                clean.contains("theft alarm") || clean.contains("थिफ्ट अलार्म") ||
+                clean.contains("siren bajao") || clean.contains("साइरन बजाओ") || clean.contains("सायरन बजाओ") ||
+                clean.contains("siren chalu") || clean.contains("siren on") || clean.contains("साइरन ऑन") ||
+                clean.contains("danger alarm") || clean.contains("chor chor") || clean.contains("चोर चोर")
+    }
+
+    private fun isTheftAlarmStopCommand(query: String): Boolean {
+        val clean = query.trim().lowercase()
+        return (clean.contains("alarm") || clean.contains("अलार्म") || clean.contains("siren") || clean.contains("साइरन") || clean.contains("सायरन")) &&
+                (clean.contains("band") || clean.contains("बंद") || clean.contains("stop") || clean.contains("स्टॉप") ||
+                        clean.contains("roko") || clean.contains("रोको") || clean.contains("off") || clean.contains("ऑफ") || clean.contains("mute"))
+    }
+
+    private fun handleTheftAlarmStart(): LocalExecutionResult {
+        Log.w(tag, "Emergency theft alarm start voice command recognized.")
+        TheftAlarmManager.getInstance(context).startTheftAlarm("वॉइस कमांड द्वारा चोरी अलार्म")
+        return LocalExecutionResult.Handled(
+            success = true,
+            actionType = "THEFT_ALARM_START",
+            messageHindi = "🚨 इमरजेंसी चोरी अलार्म फुल वॉल्यूम पर चालू किया गया!",
+            voiceResponseHindi = "Emergency theft alarm chalu kar diya gaya hai!"
+        )
+    }
+
+    private fun handleTheftAlarmStop(): LocalExecutionResult {
+        Log.i(tag, "Emergency theft alarm stop voice command recognized.")
+        TheftAlarmManager.getInstance(context).stopTheftAlarm()
+        return LocalExecutionResult.Handled(
+            success = true,
+            actionType = "THEFT_ALARM_STOP",
+            messageHindi = "चोरी अलार्म और साइरन बंद कर दिया गया।",
+            voiceResponseHindi = "Alarm band kar diya gaya hai."
         )
     }
 }

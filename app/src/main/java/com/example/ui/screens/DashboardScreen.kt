@@ -106,6 +106,7 @@ fun DashboardScreen(
     val antiTheftSettings by viewModel.antiTheftSettings.collectAsState()
     val latestIntruderLog by viewModel.latestIntruderLog.collectAsState()
     val isAntiTheftProcessing by viewModel.isAntiTheftProcessing.collectAsState()
+    val isTheftAlarmActive by viewModel.isTheftAlarmActive.collectAsState()
 
     Column(
         modifier = modifier
@@ -114,6 +115,55 @@ fun DashboardScreen(
             .verticalScroll(rememberScrollState())
             .padding(bottom = 24.dp)
     ) {
+        // High-Priority Flashing Siren Alert Bar when Theft Alarm is Active
+        if (isTheftAlarmActive) {
+            Card(
+                shape = RoundedCornerShape(0.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFDC2626)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = "Theft Alarm Active",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "🚨 चोरी अलार्म चालू है (Full Volume Siren)",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "रोकने के लिए बटन दबाएं या बोलें 'अलार्म बंद करो'",
+                                fontSize = 11.sp,
+                                color = Color.White.copy(alpha = 0.9f)
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = { viewModel.stopTheftAlarm() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("🛑 बंद करें", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626))
+                    }
+                }
+            }
+        }
         // Hero Header Card
         Box(
             modifier = Modifier
@@ -448,7 +498,9 @@ fun DashboardScreen(
             },
             onTestIntruderAlert = { viewModel.testIntruderAlert() },
             onTestSimAlert = { viewModel.testSimAlert() },
-            onTestSiren = { viewModel.triggerSiren() },
+            onTestSiren = { viewModel.startTheftAlarm("मैन्युअल टेस्ट साइरन") },
+            onStopSiren = { viewModel.stopTheftAlarm() },
+            isSirenActive = isTheftAlarmActive,
             modifier = Modifier.padding(horizontal = 16.dp)
         )
 

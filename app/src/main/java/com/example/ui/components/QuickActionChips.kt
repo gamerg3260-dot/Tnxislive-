@@ -27,9 +27,10 @@ fun QuickActionChips(
     modifier: Modifier = Modifier
 ) {
     val chips = listOf(
+        "🔒 फोन लॉक करो (लोकल)",
+        "🚨 चोरी अलार्म बजाओ (लोकल)",
+        "🛑 अलार्म बंद करो (लोकल)",
         "🛡️ एंटी थेफ्ट टेस्ट करो (Anti-Theft)",
-        "🚨 साइरन बजाओ (Emergency)",
-        "🛑 साइरन बंद करो (Emergency)",
         "📸 सेल्फी लो (Front Camera)",
         "📷 फोटो खींचो (Back Camera)",
         "🔍 सामने क्या है (AI Vision)",

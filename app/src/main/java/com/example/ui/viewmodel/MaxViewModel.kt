@@ -95,6 +95,18 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
     val allIntruderLogs: StateFlow<List<IntruderLogEntity>> = antiTheftManager.intruderLogsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val isTheftAlarmActive: StateFlow<Boolean> = antiTheftManager.theftAlarmManager.isAlarmActive
+
+    fun startTheftAlarm(reason: String = "यूजर द्वारा चालू किया गया चोरी अलार्म") {
+        antiTheftManager.startEmergencySiren(reason)
+        addLog("🚨 चोरी अलार्म चालू: $reason")
+    }
+
+    fun stopTheftAlarm() {
+        antiTheftManager.stopEmergencySiren()
+        addLog("✅ चोरी अलार्म बंद किया गया")
+    }
+
     private val _isAntiTheftProcessing = MutableStateFlow(false)
     val isAntiTheftProcessing: StateFlow<Boolean> = _isAntiTheftProcessing.asStateFlow()
 

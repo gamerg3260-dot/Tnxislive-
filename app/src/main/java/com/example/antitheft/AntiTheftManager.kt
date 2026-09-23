@@ -51,12 +51,12 @@ class AntiTheftManager private constructor(
     private val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
     private val devicePolicyManager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     private val adminComponentName = ComponentName(context, MaxDeviceAdminReceiver::class.java)
-
-    private var mediaPlayer: MediaPlayer? = null
+    val theftAlarmManager = TheftAlarmManager.getInstance(context)
 
     val settingsFlow: Flow<AntiTheftSettingsEntity?> = antiTheftDao.getSettingsFlow()
     val intruderLogsFlow: Flow<List<IntruderLogEntity>> = antiTheftDao.getAllIntruderLogsFlow()
     val latestIntruderLogFlow: Flow<IntruderLogEntity?> = antiTheftDao.getLatestIntruderLogFlow()
+    val isSirenActive: Flow<Boolean> = theftAlarmManager.isAlarmActive
 
     companion object {
         @Volatile
@@ -304,7 +304,14 @@ class AntiTheftManager private constructor(
             }
         }
 
-        // 4. Save to Room Database Log
+        // 4. Emergency Theft Siren Trigger if enabled in settings
+        if (settings.playSirenOnIntruder) {
+            Log.i(tag, "🚨 [Step 4: Emergency Siren] Wrong PIN threshold reached: Sounding loud emergency theft siren!")
+            theftAlarmManager.startTheftAlarm("गलत PIN डालने पर ऑटो-साइरन")
+            showToast("🚨 चोरी अलार्म साइरन शुरू!")
+        }
+
+        // 5. Save to Room Database Log
         val logEntity = IntruderLogEntity(
             timestamp = timestamp,
             triggerType = triggerType,
@@ -318,9 +325,27 @@ class AntiTheftManager private constructor(
         )
 
         antiTheftDao.insertIntruderLog(logEntity)
-        Log.i(tag, "💾 [Step 4: Database] Intruder log saved to Room DB (ID: ${logEntity.id})")
+        Log.i(tag, "💾 [Step 5: Database] Intruder log saved to Room DB (ID: ${logEntity.id})")
         Log.i(tag, "==========================================================")
         logEntity
+    }
+
+    /**
+     * Start the loud emergency theft siren manually (via voice or UI).
+     */
+    fun startEmergencySiren(reason: String = "यूजर द्वारा चालू किया गया चोरी अलार्म") {
+        theftAlarmManager.startTheftAlarm(reason)
+    }
+
+    fun playEmergencySiren(reason: String = "इमरजेंसी चोरी अलार्म") {
+        startEmergencySiren(reason)
+    }
+
+    /**
+     * Stop the loud emergency theft siren.
+     */
+    fun stopEmergencySiren() {
+        theftAlarmManager.stopTheftAlarm()
     }
 
     /**
@@ -451,47 +476,6 @@ class AntiTheftManager private constructor(
 
             else -> "अज्ञात रिमोट कमांड"
         }
-    }
-
-    /**
-     * Plays loud emergency siren at max volume.
-     */
-    fun playEmergencySiren() {
-        try {
-            stopEmergencySiren()
-            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxVol, 0)
-
-            val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-
-            mediaPlayer = MediaPlayer().apply {
-                setDataSource(context, alarmUri)
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
-                isLooping = true
-                prepare()
-                start()
-            }
-            Log.i(tag, "Emergency siren playing at volume $maxVol")
-        } catch (e: Exception) {
-            Log.e(tag, "Error playing emergency siren", e)
-        }
-    }
-
-    fun stopEmergencySiren() {
-        try {
-            mediaPlayer?.let {
-                if (it.isPlaying) it.stop()
-                it.release()
-            }
-            mediaPlayer = null
-        } catch (ignored: Exception) {}
     }
 
     /**

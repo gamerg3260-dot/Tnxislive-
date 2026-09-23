@@ -87,6 +87,7 @@ fun AntiTheftCard(
     isScreenLockSet: Boolean,
     latestIntruderLog: IntruderLogEntity?,
     isProcessing: Boolean,
+    isSirenActive: Boolean = false,
     onToggleEnable: (Boolean) -> Unit,
     onRequestDeviceAdmin: () -> Unit,
     onOpenScreenLockSettings: () -> Unit,
@@ -95,6 +96,7 @@ fun AntiTheftCard(
     onTestIntruderAlert: () -> Unit,
     onTestSimAlert: () -> Unit,
     onTestSiren: () -> Unit,
+    onStopSiren: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showEditContactDialog by remember { mutableStateOf(false) }
@@ -520,6 +522,57 @@ fun AntiTheftCard(
                 }
             }
 
+            if (isSirenActive) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFDC2626)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = "Siren Active",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "🚨 चोरी अलार्म चालू है! (फुल वॉल्यूम)",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "लाउड साइरन बज रहा है। बंद करने के लिए बटन दबाएं या बोलें 'अलार्म बंद करो' ।",
+                                    fontSize = 10.sp,
+                                    color = Color.White.copy(alpha = 0.9f)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = onStopSiren,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("बंद करें 🛑", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626))
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(12.dp))
 
             // 8. Action & Test Buttons
@@ -555,14 +608,25 @@ fun AntiTheftCard(
                     Text("SIM टेस्ट", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
 
-                OutlinedButton(
-                    onClick = onTestSiren,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(0.9f).height(40.dp)
-                ) {
-                    Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color(0xFFF87171), modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("साइरन", fontSize = 11.sp, color = Color(0xFFF87171))
+                if (isSirenActive) {
+                    Button(
+                        onClick = onStopSiren,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f).height(40.dp)
+                    ) {
+                        Text("🛑 बंद करें", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onTestSiren,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(0.9f).height(40.dp)
+                    ) {
+                        Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color(0xFFF87171), modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("साइरन", fontSize = 11.sp, color = Color(0xFFF87171))
+                    }
                 }
             }
 

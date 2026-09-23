@@ -32,5 +32,6 @@ data class AntiTheftSettingsEntity(
     val captureSelfieOnIntruder: Boolean = true,
     val sendSmsOnIntruder: Boolean = true,
     val sendSmsOnSimChange: Boolean = true,
-    val sirenOnRemoteAlarm: Boolean = true
+    val sirenOnRemoteAlarm: Boolean = true,
+    val playSirenOnIntruder: Boolean = true
 )
