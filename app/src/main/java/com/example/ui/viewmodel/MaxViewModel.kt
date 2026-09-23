@@ -444,7 +444,7 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             if (localResult is LocalExecutionResult.Handled) {
-                addLog("[वर्गीकरण: टास्क (TASK)] ⚡ लोकल निष्पादन: ${localResult.actionType} (Gemini API बाईपास)")
+                addLog("⚡ REAL ACTION: ${localResult.actionType} -> ${localResult.messageHindi}")
                 _agentStatus.value = AgentStatus.EXECUTING
                 _statusMessage.value = localResult.messageHindi
 

@@ -86,7 +86,7 @@ class MaxAccessibilityService : AccessibilityService() {
         } catch (ignored: Exception) {}
 
         val snapshot = ScreenTreeParser.parseRootNode(root, metrics)
-        Log.i(TAG, "[ScreenFreshness] Fresh screen snapshot captured: Package='${snapshot.packageName}', Elements=${snapshot.elements.size}, Res=${snapshot.screenWidth}x${snapshot.screenHeight}, Timestamp=${snapshot.timestamp}")
+        Log.i(TAG, "REAL ACTION: Accessibility captured real screen node tree -> Package='${snapshot.packageName}', Real Elements=${snapshot.elements.size}, Res=${snapshot.screenWidth}x${snapshot.screenHeight}")
         return snapshot
     }
 
@@ -95,10 +95,12 @@ class MaxAccessibilityService : AccessibilityService() {
         val centerX = metrics.widthPixels / 2f
         val startY = if (isDown) metrics.heightPixels * 0.72f else metrics.heightPixels * 0.28f
         val endY = if (isDown) metrics.heightPixels * 0.28f else metrics.heightPixels * 0.72f
+        Log.i(TAG, "REAL ACTION: Accessibility Service dispatching scroll gesture -> isDown=$isDown")
         return dispatchSwipeGesture(centerX, startY, centerX, endY, 260L)
     }
 
     suspend fun executeAction(action: AssistantAction): ExecutionResult {
+        Log.i(TAG, "REAL ACTION: Executing gesture via Accessibility -> Type=${action.actionType}, Target=(${action.targetX}, ${action.targetY})")
         return when (action.actionType) {
             ActionType.TAP, ActionType.SKIP_AD -> {
                 val success = dispatchTapGesture(action.targetX.toFloat(), action.targetY.toFloat())

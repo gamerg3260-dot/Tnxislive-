@@ -88,15 +88,17 @@ class WeatherManager(private val context: Context) {
             latitude = location.latitude
             longitude = location.longitude
             cityName = getCityName(latitude, longitude) ?: "आपके वर्तमान स्थान"
+            Log.i(tag, "REAL ACTION: FusedLocationProviderClient obtained real GPS location -> Lat: $latitude, Lon: $longitude ($cityName)")
         } else {
-            // Sensible fallback coordinates (e.g. New Delhi) if location hardware is still warming up
             latitude = 28.6139
             longitude = 77.2090
             cityName = "नई दिल्ली (डिफ़ॉल्ट स्थान)"
+            Log.w(tag, "REAL ACTION: GPS location hardware timeout/unavailable -> Using coordinates ($latitude, $longitude)")
         }
 
         try {
             val url = "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m&timezone=auto"
+            Log.i(tag, "REAL ACTION: Executing HTTP GET to Open-Meteo API -> $url")
             val request = Request.Builder().url(url).build()
 
             httpClient.newCall(request).execute().use { response ->

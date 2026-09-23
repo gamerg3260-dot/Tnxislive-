@@ -1074,80 +1074,43 @@ class SystemToggleController(private val context: Context) {
     suspend fun tryHandleToggleVoiceCommand(query: String): ToggleResult? {
         val lower = query.lowercase().trim()
 
-        // 1. Wi-Fi
-        if (lower.contains("wifi") || lower.contains("वाईफाई") || lower.contains("wi-fi")) {
-            val desiredState = parseDesiredState(lower)
-            return setWifi(desiredState)
-        }
-
-        // 2. Bluetooth
-        if (lower.contains("bluetooth") || lower.contains("ब्लूटूथ")) {
-            val desiredState = parseDesiredState(lower)
-            return setBluetooth(desiredState)
-        }
-
-        // 3. Mobile Data
-        if ((lower.contains("mobile data") || lower.contains("मोबाइल डाटा") || lower.contains("डेटा") || lower.contains("data")) &&
-            (lower.contains("on") || lower.contains("off") || lower.contains("चालू") || lower.contains("बंद") || lower.contains("karo") || lower.contains("करो"))
-        ) {
-            val desiredState = parseDesiredState(lower)
-            return setMobileData(desiredState)
-        }
-
-        // 4. Airplane Mode
-        if (lower.contains("airplane") || lower.contains("flight mode") || lower.contains("एरोप्लेन") || lower.contains("फ़्लाइट")) {
-            val desiredState = parseDesiredState(lower)
-            return setAirplaneMode(desiredState)
-        }
-
-        // 5. Torch / Flashlight
-        if (lower.contains("torch") || lower.contains("टॉर्च") || lower.contains("flashlight") || lower.contains("फ्लैशलाइट")) {
-            val desiredState = parseDesiredState(lower)
-            return setTorch(desiredState)
-        }
-
-        // 6. Volume
-        if (lower.contains("volume") || lower.contains("वॉल्यूम") || lower.contains("आवाज") || lower.contains("साउंड")) {
-            val desiredState = when {
-                lower.contains("badhao") || lower.contains("बढ़ाओ") || lower.contains("up") || lower.contains("तेज") -> DesiredState.INCREASE
-                lower.contains("kam") || lower.contains("कम") || lower.contains("down") || lower.contains("धीमी") -> DesiredState.DECREASE
-                lower.contains("mute") || lower.contains("म्यूट") || lower.contains("silent") || lower.contains("chup") -> DesiredState.MUTE
-                lower.contains("full") || lower.contains("फूल") || lower.contains("फुल") || lower.contains("100") -> DesiredState.MAX
-                else -> DesiredState.INCREASE
+        val res = when {
+            lower.contains("wifi") || lower.contains("वाईफाई") || lower.contains("wi-fi") -> setWifi(parseDesiredState(lower))
+            lower.contains("bluetooth") || lower.contains("ब्लूटूथ") -> setBluetooth(parseDesiredState(lower))
+            (lower.contains("mobile data") || lower.contains("मोबाइल डाटा") || lower.contains("डेटा") || lower.contains("data")) &&
+                (lower.contains("on") || lower.contains("off") || lower.contains("चालू") || lower.contains("बंद") || lower.contains("karo") || lower.contains("करो")) -> setMobileData(parseDesiredState(lower))
+            lower.contains("airplane") || lower.contains("flight mode") || lower.contains("एरोप्लेन") || lower.contains("फ़्लाइट") -> setAirplaneMode(parseDesiredState(lower))
+            lower.contains("torch") || lower.contains("flashlight") || lower.contains("टॉर्च") || lower.contains("फ्लैशलाइट") -> setTorch(parseDesiredState(lower))
+            lower.contains("volume") || lower.contains("वॉल्यूम") || lower.contains("आवाज") || lower.contains("साउंड") -> {
+                val state = when {
+                    lower.contains("badhao") || lower.contains("बढ़ाओ") || lower.contains("up") || lower.contains("तेज") -> DesiredState.INCREASE
+                    lower.contains("kam") || lower.contains("कम") || lower.contains("down") || lower.contains("धीमी") -> DesiredState.DECREASE
+                    lower.contains("mute") || lower.contains("म्यूट") || lower.contains("silent") || lower.contains("chup") -> DesiredState.MUTE
+                    lower.contains("full") || lower.contains("फूल") || lower.contains("फुल") || lower.contains("100") -> DesiredState.MAX
+                    else -> DesiredState.INCREASE
+                }
+                setVolume(state)
             }
-            return setVolume(desiredState)
-        }
-
-        // 7. Brightness
-        if (lower.contains("brightness") || lower.contains("ब्राइटनेस") || lower.contains("स्क्रीन लाइट") || lower.contains("चमक")) {
-            val desiredState = when {
-                lower.contains("badhao") || lower.contains("बढ़ाओ") || lower.contains("up") || lower.contains("तेज") -> DesiredState.INCREASE
-                lower.contains("kam") || lower.contains("कम") || lower.contains("down") || lower.contains("धीमी") -> DesiredState.DECREASE
-                lower.contains("full") || lower.contains("फूल") || lower.contains("फुल") || lower.contains("100") -> DesiredState.MAX
-                else -> DesiredState.INCREASE
+            lower.contains("brightness") || lower.contains("ब्राइटनेस") || lower.contains("स्क्रीन लाइट") || lower.contains("चमक") -> {
+                val state = when {
+                    lower.contains("badhao") || lower.contains("बढ़ाओ") || lower.contains("up") || lower.contains("तेज") -> DesiredState.INCREASE
+                    lower.contains("kam") || lower.contains("कम") || lower.contains("down") || lower.contains("धीमी") -> DesiredState.DECREASE
+                    lower.contains("full") || lower.contains("फूल") || lower.contains("फुल") || lower.contains("100") -> DesiredState.MAX
+                    else -> DesiredState.INCREASE
+                }
+                setBrightness(state)
             }
-            return setBrightness(desiredState)
+            lower.contains("dnd") || lower.contains("do not disturb") || lower.contains("डू नॉट डिस्टर्ब") || lower.contains("डीएनडी") -> setDnd(parseDesiredState(lower))
+            lower.contains("hotspot") || lower.contains("हॉटस्पॉट") || lower.contains("हॉट स्पॉट") -> setHotspot(parseDesiredState(lower))
+            lower.contains("gps") || lower.contains("location") || lower.contains("लोकेशन") || lower.contains("जीपीएस") -> setGps(parseDesiredState(lower))
+            else -> null
         }
 
-        // 8. Do Not Disturb (DND)
-        if (lower.contains("dnd") || lower.contains("do not disturb") || lower.contains("डू नॉट डिस्टर्ब") || lower.contains("डीएनडी")) {
-            val desiredState = parseDesiredState(lower)
-            return setDnd(desiredState)
+        if (res != null) {
+            Log.i(tag, "REAL ACTION: Executing System Hardware Toggle -> Name: ${res.toggleName}, TargetState: ${res.targetState}, Method: ${res.methodUsed}")
         }
 
-        // 9. Hotspot
-        if (lower.contains("hotspot") || lower.contains("हॉटस्पॉट") || lower.contains("हॉट स्पॉट")) {
-            val desiredState = parseDesiredState(lower)
-            return setHotspot(desiredState)
-        }
-
-        // 10. GPS / Location
-        if (lower.contains("gps") || lower.contains("location") || lower.contains("लोकेशन") || lower.contains("जीपीएस")) {
-            val desiredState = parseDesiredState(lower)
-            return setGps(desiredState)
-        }
-
-        return null
+        return res
     }
 
     private fun parseDesiredState(lower: String): DesiredState {
