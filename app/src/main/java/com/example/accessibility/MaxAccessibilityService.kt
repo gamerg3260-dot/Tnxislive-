@@ -86,6 +86,7 @@ class MaxAccessibilityService : AccessibilityService() {
         } catch (ignored: Exception) {}
 
         val snapshot = ScreenTreeParser.parseRootNode(root, metrics)
+        Log.i(TAG, "SCREEN_READ: package=${snapshot.packageName.ifBlank { "unknown" }}, elements_found=${snapshot.elements.size}")
         Log.i(TAG, "REAL ACTION: Accessibility captured real screen node tree -> Package='${snapshot.packageName}', Real Elements=${snapshot.elements.size}, Res=${snapshot.screenWidth}x${snapshot.screenHeight}")
         return snapshot
     }
@@ -101,7 +102,7 @@ class MaxAccessibilityService : AccessibilityService() {
 
     suspend fun executeAction(action: AssistantAction): ExecutionResult {
         Log.i(TAG, "REAL ACTION: Executing gesture via Accessibility -> Type=${action.actionType}, Target=(${action.targetX}, ${action.targetY})")
-        return when (action.actionType) {
+        val execResult = when (action.actionType) {
             ActionType.TAP, ActionType.SKIP_AD -> {
                 val success = dispatchTapGesture(action.targetX.toFloat(), action.targetY.toFloat())
                 ExecutionResult(
@@ -177,6 +178,10 @@ class MaxAccessibilityService : AccessibilityService() {
                 ExecutionResult(success = true, message = action.voiceResponseHindi, action = action)
             }
         }
+
+        val targetStr = if (action.targetX > 0 || action.targetY > 0) "pos=(${action.targetX}, ${action.targetY})" else "desc='${action.targetElementDesc}'"
+        Log.i(TAG, "ACCESSIBILITY_ACTION: type=${action.actionType}, target=$targetStr, result=${if (execResult.success) "success" else "fail"}")
+        return execResult
     }
 
     private suspend fun dispatchTapGesture(x: Float, y: Float): Boolean {

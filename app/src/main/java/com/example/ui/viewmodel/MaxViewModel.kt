@@ -621,6 +621,8 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
                 val historyDeferred = viewModelScope.async(Dispatchers.IO) { repository.getRecentHistoryList(6) }
                 val snapshot = captureActiveScreenSnapshot()
 
+                addLog("👁️ SCREEN_READ: package=${snapshot.packageName.ifBlank { "unknown" }}, elements_found=${snapshot.elements.size}")
+
                 val memories = memoriesDeferred.await()
                 val history = historyDeferred.await()
 
@@ -631,11 +633,13 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
                     recentHistory = history
                 )
 
+                addLog("🤖 GEMINI_SCREEN_QUERY: sent, response=${action.actionType} (${action.targetX}, ${action.targetY}) - ${action.targetElementDesc}")
+
                 _statusMessage.value = action.voiceResponseHindi
                 voiceManager.speak(action.voiceResponseHindi, 0.98f)
 
                 val execResult = executeAssistantAction(action)
-                addLog("एक्शन परिणाम: ${execResult.message}")
+                addLog("⚡ ACCESSIBILITY_ACTION: type=${action.actionType}, target=(${action.targetX}, ${action.targetY}), result=${if (execResult.success) "success" else "fail"}")
 
                 repository.logCommand(
                     prompt = rawCommandText,

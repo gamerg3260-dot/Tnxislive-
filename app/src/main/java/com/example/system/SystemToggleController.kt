@@ -189,7 +189,7 @@ class SystemToggleController(private val context: Context) {
     // =============================================================================================
 
     /**
-     * Executes a Wi-Fi toggle request with guaranteed fallback.
+     * Executes a Wi-Fi toggle request with fully automatic switch detection and tapping.
      */
     suspend fun setWifi(desiredState: DesiredState): ToggleResult {
         val currentState = isWifiEnabled()
@@ -200,79 +200,44 @@ class SystemToggleController(private val context: Context) {
             else -> true
         }
 
-        if (currentState == targetState) {
-            val stateWord = if (currentState) "पहले से ही चालू" else "पहले से ही बंद"
-            return ToggleResult(
-                success = true,
-                toggleName = "Wi-Fi",
-                targetState = targetState,
-                wasAlreadyInState = true,
-                methodUsed = "NOOP_ALREADY_SET",
-                voiceResponseHindi = "वाई-फ़ाई $stateWord है।",
-                logMessageHindi = "वाई-फ़ाई का वर्तमान स्टेटस पहले से ही ${if (currentState) "ON" else "OFF"} है।"
-            )
-        }
-
-        // Method 1: Direct API (Android 9 and below or vendor-supported)
-        var directSuccess = false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             try {
                 @Suppress("DEPRECATION")
-                directSuccess = wifiManager?.setWifiEnabled(targetState) == true
+                val directSuccess = wifiManager?.setWifiEnabled(targetState) == true
+                if (directSuccess) {
+                    val logFound = "WIFI_SWITCH_FOUND: true"
+                    val logState = "WIFI_CURRENT_STATE: ${if (currentState) "ON" else "OFF"}"
+                    val logTap = "WIFI_TAP_PERFORMED: true"
+                    Log.i(tag, "$logFound | $logState | $logTap")
+                    val actionWord = if (targetState) "चालू कर दिया गया है" else "बंद कर दिया गया है"
+                    return ToggleResult(
+                        success = true,
+                        toggleName = "Wi-Fi",
+                        targetState = targetState,
+                        wasAlreadyInState = false,
+                        methodUsed = "DIRECT_API",
+                        voiceResponseHindi = "वाई-फ़ाई $actionWord।",
+                        logMessageHindi = "$logFound | $logState | $logTap"
+                    )
+                }
             } catch (e: Exception) {
                 Log.d(tag, "Direct WifiManager API failed: ${e.localizedMessage}")
             }
         }
 
-        if (directSuccess) {
-            val stateWord = if (targetState) "चालू (ON)" else "बंद (OFF)"
-            return ToggleResult(
-                success = true,
-                toggleName = "Wi-Fi",
-                targetState = targetState,
-                wasAlreadyInState = false,
-                methodUsed = "DIRECT_API",
-                voiceResponseHindi = "वाई-फ़ाई $stateWord कर दिया गया है।",
-                logMessageHindi = "वाई-फ़ाई को डायरेक्ट सिस्टम API द्वारा $stateWord किया गया।"
-            )
-        }
-
-        // Method 2: Accessibility Fallback (Quick Settings Tile or Settings Switch auto-toggle)
-        Log.i(tag, "Direct Wi-Fi toggle restricted on Android ${Build.VERSION.SDK_INT}. Using Accessibility auto-toggle fallback...")
-        val fallbackSuccess = toggleViaQuickSettingsOrSettings(
-            tileKeywords = listOf("wi-fi", "wifi", "वाईफाई", "इंटरनेट", "internet"),
+        return executeSettingsAutoToggle(
+            toggleTag = "WIFI",
+            toggleDisplayName = "Wi-Fi",
+            toggleDisplayNameHindi = "वाई-फ़ाई",
             settingsAction = Settings.ACTION_WIFI_SETTINGS,
-            targetState = targetState
+            targetState = targetState,
+            keywords = listOf("wi-fi", "wifi", "वाईफाई", "use wi-fi", "use wifi", "internet"),
+            systemStateChecker = { isWifiEnabled() }
         )
-
-        val stateWord = if (targetState) "चालू" else "बंद"
-        return if (fallbackSuccess) {
-            ToggleResult(
-                success = true,
-                toggleName = "Wi-Fi",
-                targetState = targetState,
-                wasAlreadyInState = false,
-                methodUsed = "ACCESSIBILITY_QUICK_SETTINGS",
-                voiceResponseHindi = "वाई-फ़ाई $stateWord कर दिया गया है।",
-                logMessageHindi = "Accessibility Service ने क्विक सेटिंग्स/टाइल से वाई-फ़ाई को $stateWord किया।"
-            )
-        } else {
-            // Open settings panel gracefully as last resort
-            openSettingsDirectly(Settings.ACTION_WIFI_SETTINGS)
-            ToggleResult(
-                success = true,
-                toggleName = "Wi-Fi",
-                targetState = targetState,
-                wasAlreadyInState = false,
-                methodUsed = "SETTINGS_PANEL",
-                voiceResponseHindi = "वाई-फ़ाई सेटिंग्स खोल दी गई हैं।",
-                logMessageHindi = "वाई-फ़ाई सेटिंग्स स्क्रीन खोली गई।"
-            )
-        }
     }
 
     /**
-     * Executes a Bluetooth toggle request with guaranteed fallback.
+     * Executes a Bluetooth toggle request with fully automatic switch detection and tapping.
      */
     suspend fun setBluetooth(desiredState: DesiredState): ToggleResult {
         val currentState = isBluetoothEnabled()
@@ -283,78 +248,45 @@ class SystemToggleController(private val context: Context) {
             else -> true
         }
 
-        if (currentState == targetState) {
-            val stateWord = if (currentState) "पहले से ही चालू" else "पहले से ही बंद"
-            return ToggleResult(
-                success = true,
-                toggleName = "Bluetooth",
-                targetState = targetState,
-                wasAlreadyInState = true,
-                methodUsed = "NOOP_ALREADY_SET",
-                voiceResponseHindi = "ब्लूटूथ $stateWord है।",
-                logMessageHindi = "ब्लूटूथ पहले से ही ${if (currentState) "ON" else "OFF"} स्थिति में है।"
-            )
-        }
-
-        // Method 1: Direct API (Allowed when BLUETOOTH_ADMIN is granted or on Android < 13)
-        var directSuccess = false
         try {
             val adapter = bluetoothManager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
             if (adapter != null) {
                 @Suppress("DEPRECATION")
-                directSuccess = if (targetState) adapter.enable() else adapter.disable()
+                val directSuccess = if (targetState) adapter.enable() else adapter.disable()
+                if (directSuccess) {
+                    val logFound = "BLUETOOTH_SWITCH_FOUND: true"
+                    val logState = "BLUETOOTH_CURRENT_STATE: ${if (currentState) "ON" else "OFF"}"
+                    val logTap = "BLUETOOTH_TAP_PERFORMED: true"
+                    Log.i(tag, "$logFound | $logState | $logTap")
+                    val actionWord = if (targetState) "चालू कर दिया गया है" else "बंद कर दिया गया है"
+                    return ToggleResult(
+                        success = true,
+                        toggleName = "Bluetooth",
+                        targetState = targetState,
+                        wasAlreadyInState = false,
+                        methodUsed = "DIRECT_API",
+                        voiceResponseHindi = "ब्लूटूथ $actionWord।",
+                        logMessageHindi = "$logFound | $logState | $logTap"
+                    )
+                }
             }
         } catch (e: Exception) {
             Log.d(tag, "Direct BluetoothAdapter enable/disable restricted: ${e.localizedMessage}")
         }
 
-        if (directSuccess) {
-            val stateWord = if (targetState) "चालू (ON)" else "बंद (OFF)"
-            return ToggleResult(
-                success = true,
-                toggleName = "Bluetooth",
-                targetState = targetState,
-                wasAlreadyInState = false,
-                methodUsed = "DIRECT_API",
-                voiceResponseHindi = "ब्लूटूथ $stateWord कर दिया गया है।",
-                logMessageHindi = "ब्लूटूथ सीधे सिस्टम अडैप्टर द्वारा $stateWord किया गया।"
-            )
-        }
-
-        // Method 2: Accessibility Quick Settings Tile auto-toggle
-        val fallbackSuccess = toggleViaQuickSettingsOrSettings(
-            tileKeywords = listOf("bluetooth", "ब्लूटूथ"),
+        return executeSettingsAutoToggle(
+            toggleTag = "BLUETOOTH",
+            toggleDisplayName = "Bluetooth",
+            toggleDisplayNameHindi = "ब्लूटूथ",
             settingsAction = Settings.ACTION_BLUETOOTH_SETTINGS,
-            targetState = targetState
+            targetState = targetState,
+            keywords = listOf("bluetooth", "use bluetooth", "ब्लूटूथ"),
+            systemStateChecker = { isBluetoothEnabled() }
         )
-
-        val stateWord = if (targetState) "चालू" else "बंद"
-        return if (fallbackSuccess) {
-            ToggleResult(
-                success = true,
-                toggleName = "Bluetooth",
-                targetState = targetState,
-                wasAlreadyInState = false,
-                methodUsed = "ACCESSIBILITY_QUICK_SETTINGS",
-                voiceResponseHindi = "ब्लूटूथ $stateWord कर दिया गया है।",
-                logMessageHindi = "Accessibility Service द्वारा ब्लूटूथ टाइल को $stateWord किया गया।"
-            )
-        } else {
-            openSettingsDirectly(Settings.ACTION_BLUETOOTH_SETTINGS)
-            ToggleResult(
-                success = true,
-                toggleName = "Bluetooth",
-                targetState = targetState,
-                wasAlreadyInState = false,
-                methodUsed = "SETTINGS_PANEL",
-                voiceResponseHindi = "ब्लूटूथ सेटिंग्स खोल दी गई हैं।",
-                logMessageHindi = "ब्लूटूथ सेटिंग्स खोली गई।"
-            )
-        }
     }
 
     /**
-     * Executes a Mobile Data toggle request with guaranteed Quick Settings fallback.
+     * Executes a Mobile Data toggle request with fully automatic switch detection and tapping.
      */
     suspend fun setMobileData(desiredState: DesiredState): ToggleResult {
         val currentState = isMobileDataEnabled()
@@ -365,50 +297,15 @@ class SystemToggleController(private val context: Context) {
             else -> true
         }
 
-        if (currentState == targetState) {
-            val stateWord = if (currentState) "पहले से ही चालू" else "पहले से ही बंद"
-            return ToggleResult(
-                success = true,
-                toggleName = "Mobile Data",
-                targetState = targetState,
-                wasAlreadyInState = true,
-                methodUsed = "NOOP_ALREADY_SET",
-                voiceResponseHindi = "मोबाइल डेटा $stateWord है।",
-                logMessageHindi = "मोबाइल डेटा पहले से ही ${if (currentState) "ON" else "OFF"} है।"
-            )
-        }
-
-        // Android strictly restricts third-party apps from toggling telephony data via direct API.
-        // Guaranteed Path: Accessibility Quick Settings Tile / Mobile Data Switch.
-        val fallbackSuccess = toggleViaQuickSettingsOrSettings(
-            tileKeywords = listOf("mobile data", "मोबाइल डेटा", "cellular", "data", "डेटा"),
+        return executeSettingsAutoToggle(
+            toggleTag = "MOBILE_DATA",
+            toggleDisplayName = "Mobile Data",
+            toggleDisplayNameHindi = "मोबाइल डेटा",
             settingsAction = Settings.ACTION_DATA_ROAMING_SETTINGS,
-            targetState = targetState
+            targetState = targetState,
+            keywords = listOf("mobile data", "cellular data", "use mobile data", "मोबाइल डेटा", "डेटा", "data"),
+            systemStateChecker = { isMobileDataEnabled() }
         )
-
-        val stateWord = if (targetState) "चालू" else "बंद"
-        return if (fallbackSuccess) {
-            ToggleResult(
-                success = true,
-                toggleName = "Mobile Data",
-                targetState = targetState,
-                wasAlreadyInState = false,
-                methodUsed = "ACCESSIBILITY_QUICK_SETTINGS",
-                voiceResponseHindi = "मोबाइल डेटा $stateWord कर दिया गया है।",
-                logMessageHindi = "Accessibility सर्विस ने क्विक सेटिंग्स से मोबाइल डेटा $stateWord किया।"
-            )
-        } else {
-            openSettingsDirectly(Settings.ACTION_DATA_ROAMING_SETTINGS)
-            ToggleResult(
-                success = true,
-                toggleName = "Mobile Data",
-                targetState = targetState,
-                wasAlreadyInState = false,
-                methodUsed = "SETTINGS_PANEL",
-                voiceResponseHindi = "मोबाइल डेटा सेटिंग्स खोल दी गई हैं।",
-                logMessageHindi = "मोबाइल डेटा सेटिंग्स खोली गई।"
-            )
-        }
     }
 
     /**
@@ -787,7 +684,7 @@ class SystemToggleController(private val context: Context) {
     }
 
     /**
-     * Executes Hotspot toggle request.
+     * Executes Hotspot toggle request with fully automatic switch detection and tapping.
      */
     suspend fun setHotspot(desiredState: DesiredState): ToggleResult {
         val targetState = when (desiredState) {
@@ -797,37 +694,15 @@ class SystemToggleController(private val context: Context) {
             else -> true
         }
 
-        // Hotspot toggle requires system privileges on Android 8+;
-        // Guaranteed Path: Accessibility Quick Settings tile auto-click or Tethering switch tap.
-        val fallbackSuccess = toggleViaQuickSettingsOrSettings(
-            tileKeywords = listOf("hotspot", "हॉटस्पॉट", "tethering"),
+        return executeSettingsAutoToggle(
+            toggleTag = "HOTSPOT",
+            toggleDisplayName = "Hotspot",
+            toggleDisplayNameHindi = "हॉटस्पॉट",
             settingsAction = "android.settings.TETHER_SETTINGS",
-            targetState = targetState
+            targetState = targetState,
+            keywords = listOf("hotspot", "portable hotspot", "wi-fi hotspot", "use hotspot", "tethering", "हॉटस्पॉट"),
+            systemStateChecker = { false }
         )
-
-        val stateWord = if (targetState) "चालू" else "बंद"
-        return if (fallbackSuccess) {
-            ToggleResult(
-                success = true,
-                toggleName = "Hotspot",
-                targetState = targetState,
-                wasAlreadyInState = false,
-                methodUsed = "ACCESSIBILITY_QUICK_SETTINGS",
-                voiceResponseHindi = "हॉटस्पॉट $stateWord कर दिया गया है।",
-                logMessageHindi = "Accessibility सर्विस द्वारा हॉटस्पॉट को $stateWord किया गया।"
-            )
-        } else {
-            openSettingsDirectly("android.settings.TETHER_SETTINGS")
-            ToggleResult(
-                success = true,
-                toggleName = "Hotspot",
-                targetState = targetState,
-                wasAlreadyInState = false,
-                methodUsed = "SETTINGS_PANEL",
-                voiceResponseHindi = "हॉटस्पॉट सेटिंग्स खोल दी गई हैं।",
-                logMessageHindi = "हॉटस्पॉट सेटिंग्स स्क्रीन खोली गई।"
-            )
-        }
     }
 
     /**
@@ -888,8 +763,238 @@ class SystemToggleController(private val context: Context) {
     }
 
     // =============================================================================================
-    // 3. UNIVERSAL ACCESSIBILITY AUTO-TOGGLE ENGINE
+    // 3. FULLY AUTOMATIC ACCESSIBILITY SETTINGS AUTO-TOGGLE ENGINE
     // =============================================================================================
+
+    /**
+     * Fully automatic Settings auto-toggle engine.
+     * Opens target Settings screen, polls Accessibility tree to find switch, inspects current state (ON/OFF),
+     * taps switch if necessary, and logs exact required debug statements.
+     */
+    private suspend fun executeSettingsAutoToggle(
+        toggleTag: String,             // "WIFI", "MOBILE_DATA", "HOTSPOT", "BLUETOOTH"
+        toggleDisplayName: String,      // "Wi-Fi", "Mobile Data", "Hotspot", "Bluetooth"
+        toggleDisplayNameHindi: String, // "वाई-फ़ाई", "मोबाइल डेटा", "हॉटस्पॉट", "ब्लूटूथ"
+        settingsAction: String,        // e.g. Settings.ACTION_WIFI_SETTINGS
+        targetState: Boolean,          // true for ON, false for OFF
+        keywords: List<String>,        // Keywords to locate the switch element
+        systemStateChecker: () -> Boolean
+    ): ToggleResult {
+        val service = MaxAccessibilityService.instance
+
+        // If Accessibility Service is NOT active
+        if (service == null) {
+            val logFound = "${toggleTag}_SWITCH_FOUND: false"
+            val logState = "${toggleTag}_CURRENT_STATE: UNKNOWN"
+            val logTap = "${toggleTag}_TAP_PERFORMED: false"
+
+            Log.w(tag, logFound)
+            Log.w(tag, logState)
+            Log.w(tag, logTap)
+
+            openSettingsDirectly(settingsAction)
+
+            val voiceMsg = "यह ऑटोमैटिकली नहीं हो पाया, कृपया एक्सेसिबिलिटी सर्विस चालू करके फिर से प्रयास करें।"
+            return ToggleResult(
+                success = false,
+                toggleName = toggleDisplayName,
+                targetState = targetState,
+                wasAlreadyInState = false,
+                methodUsed = "NO_ACCESSIBILITY_SERVICE",
+                voiceResponseHindi = voiceMsg,
+                logMessageHindi = "$logFound | $logState | $logTap"
+            )
+        }
+
+        // 1. Open target Settings Screen
+        Log.i(tag, "Opening Settings screen for $toggleDisplayName ($settingsAction)...")
+        openSettingsDirectly(settingsAction)
+
+        // 2. Poll Accessibility window tree for up to 3 seconds (10 attempts x 300ms)
+        var switchNode: AccessibilityNodeInfo? = null
+        for (attempt in 1..10) {
+            delay(300)
+            val root = try { service.rootInActiveWindow } catch (e: Exception) { null }
+            if (root != null) {
+                switchNode = findSwitchNodeForToggle(root, keywords)
+                if (switchNode != null) {
+                    break
+                }
+                root.recycle()
+            }
+        }
+
+        // 3. Handle Switch NOT Found
+        if (switchNode == null) {
+            val logFound = "${toggleTag}_SWITCH_FOUND: false"
+            val logState = "${toggleTag}_CURRENT_STATE: UNKNOWN"
+            val logTap = "${toggleTag}_TAP_PERFORMED: false"
+
+            Log.w(tag, logFound)
+            Log.w(tag, logState)
+            Log.w(tag, logTap)
+
+            val voiceMsg = "यह ऑटोमैटिकली नहीं हो पाया, कृपया मैनुअली कर दीजिए।"
+            return ToggleResult(
+                success = false,
+                toggleName = toggleDisplayName,
+                targetState = targetState,
+                wasAlreadyInState = false,
+                methodUsed = "SWITCH_NODE_NOT_FOUND",
+                voiceResponseHindi = voiceMsg,
+                logMessageHindi = "$logFound | $logState | $logTap"
+            )
+        }
+
+        // 4. Switch Node IS Found -> Inspect Current State (ON or OFF)
+        val logFound = "${toggleTag}_SWITCH_FOUND: true"
+        Log.i(tag, logFound)
+
+        val currentState = detectSwitchState(switchNode, systemStateChecker)
+        val stateStr = if (currentState) "ON" else "OFF"
+        val logState = "${toggleTag}_CURRENT_STATE: $stateStr"
+        Log.i(tag, logState)
+
+        // 5. Check if ALREADY in requested target state
+        if (currentState == targetState) {
+            val logTap = "${toggleTag}_TAP_PERFORMED: false"
+            Log.i(tag, logTap)
+            switchNode.recycle()
+
+            val stateWord = if (currentState) "पहले से ही चालू" else "पहले से ही बंद"
+            val voiceMsg = "$toggleDisplayNameHindi $stateWord है।"
+
+            return ToggleResult(
+                success = true,
+                toggleName = toggleDisplayName,
+                targetState = targetState,
+                wasAlreadyInState = true,
+                methodUsed = "NOOP_ALREADY_IN_STATE",
+                voiceResponseHindi = voiceMsg,
+                logMessageHindi = "$logFound | $logState | $logTap"
+            )
+        }
+
+        // 6. Action Required: Tap the switch!
+        val tapped = performClickOnNodeOrParent(switchNode)
+        switchNode.recycle()
+
+        val logTap = "${toggleTag}_TAP_PERFORMED: $tapped"
+        Log.i(tag, logTap)
+
+        val voiceMsg = if (tapped) {
+            val actionWord = if (targetState) "चालू कर दिया गया है" else "बंद कर दिया गया है"
+            "$toggleDisplayNameHindi $actionWord।"
+        } else {
+            "यह ऑटोमैटिकली नहीं हो पाया, कृपया मैनुअली कर दीजिए।"
+        }
+
+        return ToggleResult(
+            success = tapped,
+            toggleName = toggleDisplayName,
+            targetState = targetState,
+            wasAlreadyInState = false,
+            methodUsed = if (tapped) "ACCESSIBILITY_TAP_SUCCESS" else "ACCESSIBILITY_TAP_FAILED",
+            voiceResponseHindi = voiceMsg,
+            logMessageHindi = "$logFound | $logState | $logTap"
+        )
+    }
+
+    /**
+     * Scans accessibility node tree for switch/toggle element matching keywords or standard Switch classes.
+     */
+    private fun findSwitchNodeForToggle(
+        rootNode: AccessibilityNodeInfo,
+        keywords: List<String>
+    ): AccessibilityNodeInfo? {
+
+        // Phase 1: Search by matching text/description keywords AND contains/is a checkable/switch node
+        fun searchByKeywordAndSwitch(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+            if (node == null) return null
+            val text = node.text?.toString()?.lowercase() ?: ""
+            val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+            val cls = node.className?.toString() ?: ""
+
+            val matchesKw = keywords.any { text.contains(it, ignoreCase = true) || desc.contains(it, ignoreCase = true) }
+            val isSwitchClass = cls.contains("Switch", ignoreCase = true) ||
+                    cls.contains("Toggle", ignoreCase = true) ||
+                    cls.contains("CompoundButton", ignoreCase = true)
+
+            if (matchesKw) {
+                if (node.isCheckable || isSwitchClass || node.isClickable) {
+                    return node
+                }
+            }
+
+            for (i in 0 until node.childCount) {
+                val child = try { node.getChild(i) } catch (e: Exception) { null } ?: continue
+                val found = searchByKeywordAndSwitch(child)
+                if (found != null) {
+                    if (found != child) child.recycle()
+                    return found
+                }
+                child.recycle()
+            }
+            return null
+        }
+
+        // Phase 2: Search for ANY checkable / Switch class node on screen
+        fun searchAnySwitchNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+            if (node == null) return null
+            val cls = node.className?.toString() ?: ""
+            val isSwitchClass = cls.contains("Switch", ignoreCase = true) ||
+                    cls.contains("Toggle", ignoreCase = true) ||
+                    cls.contains("CompoundButton", ignoreCase = true)
+
+            if (node.isCheckable || isSwitchClass) {
+                return node
+            }
+
+            for (i in 0 until node.childCount) {
+                val child = try { node.getChild(i) } catch (e: Exception) { null } ?: continue
+                val found = searchAnySwitchNode(child)
+                if (found != null) {
+                    if (found != child) child.recycle()
+                    return found
+                }
+                child.recycle()
+            }
+            return null
+        }
+
+        val kwResult = searchByKeywordAndSwitch(rootNode)
+        if (kwResult != null) return kwResult
+
+        return searchAnySwitchNode(rootNode)
+    }
+
+    /**
+     * Inspects switch node or its hierarchy/text to accurately determine if it is currently ON or OFF.
+     */
+    private fun detectSwitchState(
+        node: AccessibilityNodeInfo,
+        systemFallback: () -> Boolean
+    ): Boolean {
+        if (node.isCheckable) {
+            return node.isChecked
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = try { node.getChild(i) } catch (e: Exception) { null } ?: continue
+            if (child.isCheckable) {
+                val checked = child.isChecked
+                child.recycle()
+                return checked
+            }
+            child.recycle()
+        }
+
+        val text = ((node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")).lowercase()
+        if (text.contains("on") || text.contains("enabled") || text.contains("चालू")) return true
+        if (text.contains("off") || text.contains("disabled") || text.contains("बंद")) return false
+
+        return systemFallback()
+    }
 
     /**
      * Automatically opens Quick Settings or Settings screen, scans the node tree for the matching

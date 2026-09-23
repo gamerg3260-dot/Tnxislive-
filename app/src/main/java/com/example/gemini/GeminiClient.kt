@@ -68,13 +68,16 @@ class GeminiClient(
         val elementSig = buildElementSignature(screenSnapshot)
         val cachedAction = GeminiActionCache.get(screenSnapshot.packageName, userCommand, elementSig)
         if (cachedAction != null) {
+            Log.i(tag, "GEMINI_SCREEN_QUERY: sent (cache hit), response=${cachedAction.actionType} target=(${cachedAction.targetX}, ${cachedAction.targetY}) desc='${cachedAction.targetElementDesc}'")
             return@withContext cachedAction
         }
 
         val apiKey = getApiKey()
         if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
             Log.d(tag, "No active Gemini API key configured. Using generic on-device UI reasoning engine.")
-            return@withContext performGenericLocalReasoning(userCommand, screenSnapshot, memories, recentHistory, activityContext)
+            val action = performGenericLocalReasoning(userCommand, screenSnapshot, memories, recentHistory, activityContext)
+            Log.i(tag, "GEMINI_SCREEN_QUERY: sent (local engine), response=${action.actionType} target=(${action.targetX}, ${action.targetY}) desc='${action.targetElementDesc}'")
+            return@withContext action
         }
 
         try {
@@ -136,6 +139,7 @@ class GeminiClient(
                                 val action = parseGeminiJson(textOutput)
                                 // Cache for future instantaneous hits
                                 GeminiActionCache.put(screenSnapshot.packageName, userCommand, elementSig, action)
+                                Log.i(tag, "GEMINI_SCREEN_QUERY: sent ($model), response=${action.actionType} target=(${action.targetX}, ${action.targetY}) desc='${action.targetElementDesc}'")
                                 return@withContext action
                             }
                         } else {
@@ -167,10 +171,14 @@ class GeminiClient(
             }
 
             Log.e(tag, "All fast Flash models busy ($lastErrorMsg). Switching to on-device reasoning.")
-            performGenericLocalReasoning(userCommand, screenSnapshot, memories, recentHistory, activityContext)
+            val action = performGenericLocalReasoning(userCommand, screenSnapshot, memories, recentHistory, activityContext)
+            Log.i(tag, "GEMINI_SCREEN_QUERY: sent (fallback local), response=${action.actionType} target=(${action.targetX}, ${action.targetY}) desc='${action.targetElementDesc}'")
+            return@withContext action
         } catch (e: Exception) {
             Log.e(tag, "Unexpected error in decideAction, using local fallback", e)
-            performGenericLocalReasoning(userCommand, screenSnapshot, memories, recentHistory, activityContext)
+            val action = performGenericLocalReasoning(userCommand, screenSnapshot, memories, recentHistory, activityContext)
+            Log.i(tag, "GEMINI_SCREEN_QUERY: sent (error local), response=${action.actionType} target=(${action.targetX}, ${action.targetY}) desc='${action.targetElementDesc}'")
+            return@withContext action
         }
     }
 
@@ -784,7 +792,8 @@ class GeminiClient(
             }
 
             if (targetNode != null) {
-                val label = targetNode.text.ifBlank { targetNode.contentDescription }.take(30)
+                val nodeText = targetNode.text.ifBlank { targetNode.contentDescription }
+                val label = nodeText.take(50)
                 val posName = when (ordinalIndex) {
                     0 -> "पहला"
                     1 -> "दूसरा"
@@ -794,13 +803,21 @@ class GeminiClient(
                     -1 -> "आखिरी"
                     else -> "चुना गया"
                 }
+
+                val isReadCommand = lower.contains("padho") || lower.contains("read") || lower.contains("पढ़ो") || lower.contains("message") || lower.contains("मैसेज")
+                val voiceReply = if (isReadCommand && label.isNotBlank()) {
+                    "$posName मैसेज है: \"$label\""
+                } else {
+                    "$posName आइटम \"$label\" खोल रहा हूँ।"
+                }
+
                 return AssistantAction(
                     actionType = ActionType.TAP,
                     targetX = targetNode.centerX,
                     targetY = targetNode.centerY,
                     targetElementDesc = "Item #$ordinalIndex: $label",
                     reasonHindi = "स्क्रीन पर विजुअल ऑर्डर में $posName आइटम चुना गया",
-                    voiceResponseHindi = "$posName आइटम \"$label\" खोल रहा हूँ।"
+                    voiceResponseHindi = voiceReply
                 )
             }
         }
