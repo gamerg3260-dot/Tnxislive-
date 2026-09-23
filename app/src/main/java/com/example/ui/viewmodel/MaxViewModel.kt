@@ -24,6 +24,9 @@ import com.example.weather.WeatherResult
 import com.example.weather.CurrentWeatherInfo
 import com.example.router.LocalCommandRouter
 import com.example.router.LocalExecutionResult
+import com.example.router.IntentClassifier
+import com.example.router.InputCategory
+import com.example.router.IntentClassificationResult
 import com.example.voice.MaxVoiceManager
 import com.example.camera.MaxCameraManager
 import com.example.camera.CameraCaptureResult
@@ -62,6 +65,7 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
     private val geminiClient = app.geminiClient
     val simulatorState = app.simulatorState
     val localCommandRouter = LocalCommandRouter(application)
+    val intentClassifier = IntentClassifier()
     val toggleController get() = localCommandRouter.toggleController
 
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
@@ -422,6 +426,55 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return@launch
             }
+
+            // =========================================================================
+            // STEP 0C: SMART INTENT CLASSIFICATION (Task/Hardware Command vs Conversation/Q&A)
+            // =========================================================================
+            var classification = intentClassifier.classify(commandText)
+            if (classification.category == InputCategory.AMBIGUOUS) {
+                // Micro-check with Gemini Flash if heuristics are ambiguous
+                val geminiDecision = geminiClient.classifyIntentViaGemini(commandText)
+                classification = if (geminiDecision == "CONVERSATION") {
+                    IntentClassificationResult(InputCategory.CONVERSATION_CHAT, 0.9f, "AI वार्तालाप वर्गीकरण (Gemini Flash)")
+                } else {
+                    IntentClassificationResult(InputCategory.TASK_COMMAND, 0.9f, "AI टास्क वर्गीकरण (Gemini Flash)")
+                }
+            }
+
+            // -------------------------------------------------------------------------
+            // IF CONVERSATION / QUESTION: ANSWER DIRECTLY WITH NATURAL HINDI (NO DEVICE ACTIONS)
+            // -------------------------------------------------------------------------
+            if (classification.category == InputCategory.CONVERSATION_CHAT) {
+                addLog("💬 बातचीत / सवाल पहचाना गया (${classification.reason}): जेमिनी से उत्तर प्राप्त किया जा रहा है...")
+                _agentStatus.value = AgentStatus.THINKING
+                _statusMessage.value = "सोच रहा हूँ..."
+
+                val memories = repository.allMemories.first()
+                val replyText = geminiClient.generateConversationalReply(commandText, memories)
+
+                addLog("मैक्स उत्तर: $replyText")
+                repository.logCommand(
+                    prompt = commandText,
+                    app = "Max Conversation / Gemini",
+                    actionType = "CONVERSATION_REPLY",
+                    actionDetails = "Answered naturally in Hindi without triggering device actions",
+                    responseHindi = replyText,
+                    success = true
+                )
+
+                _agentStatus.value = AgentStatus.SPEAKING
+                _statusMessage.value = replyText
+                voiceManager.speak(replyText, speechRate.value)
+
+                delay(3000)
+                if (_agentStatus.value == AgentStatus.SPEAKING) {
+                    _agentStatus.value = AgentStatus.IDLE
+                    _statusMessage.value = "मैक्स तैयार है।"
+                }
+                return@launch
+            }
+
+            addLog("⚡ कार्य/टास्क कमांड: लोकल-फर्स्ट निष्पादन पाइपलाइन शुरू...")
 
             // =========================================================================
             // STEP 1A: OFFLINE REMINDERS & ALARMS (AlarmManager + Room Database)

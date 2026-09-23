@@ -255,6 +255,149 @@ class GeminiClient(
     }.flowOn(Dispatchers.IO)
 
     /**
+     * Generates a warm, natural Hindi conversational reply (Non-task chat/Q&A)
+     * using Gemini Flash with memory context and persona awareness.
+     */
+    suspend fun generateConversationalReply(
+        userPrompt: String,
+        memories: List<UserMemoryEntity> = emptyList()
+    ): String = withContext(Dispatchers.IO) {
+        val apiKey = getApiKey()
+        if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
+            // Local fallback conversational answers
+            val lower = userPrompt.lowercase()
+            return@withContext when {
+                lower.contains("kaise ho") || lower.contains("how are you") -> "मैं बहुत बढ़िया हूँ! आप कैसे हैं? बताइए मैं आपकी क्या मदद कर सकता हूँ।"
+                lower.contains("kisne banaya") || lower.contains("who made you") || lower.contains("who created you") -> "मुझे गणेश साहनी (Ganesh Sahani) ने बनाया है, मैं उनका पर्सनल AI असिस्टेंट मैक्स (Max) हूँ।"
+                lower.contains("joke") || lower.contains("चुटकुला") -> "एक बार पिंटू डॉक्टर के पास गया और बोला: डॉक्टर साहब, मुझे बहुत भूलने की बीमारी हो गई है! डॉक्टर: कब से? पिंटू: क्या कब से?"
+                lower.contains("shayari") || lower.contains("शायरी") -> "मंजिल उन्हीं को मिलती है, जिनके सपनों में जान होती है, पंखों से कुछ नहीं होता, हौसलों से उड़ान होती है!"
+                else -> "नमस्ते! मैं मैक्स हूँ। मैं आपका फोन कंट्रोल कर सकता हूँ और आपके सवालों के जवाब भी दे सकता हूँ।"
+            }
+        }
+
+        try {
+            val memoryContext = if (memories.isNotEmpty()) {
+                val memStrings = memories.take(5).joinToString(", ") { "${it.key}: ${it.value}" }
+                "\n[User Known Preferences/Context]: $memStrings"
+            } else ""
+
+            val systemInstruction = """
+                You are Max (मैक्स), an intelligent, warm, ultra-helpful and friendly personal AI assistant created by Ganesh Sahani (गणेश साहनी).
+                - Speak in natural, everyday Hindi (or Hinglish if appropriate).
+                - When asked who created you, proudly and warmly mention: 'मुझे गणेश साहनी (Ganesh Sahani) ने बनाया है, मैं उनका पर्सनल AI असिस्टेंट मैक्स (Max) हूँ।'
+                - Keep your conversational answers concise, warm, helpful and direct (1-3 sentences maximum), ideal for Text-To-Speech.
+                - DO NOT output Markdown code blocks, JSON or action tags. Output ONLY the natural speech response in Hindi.
+            """.trimIndent()
+
+            val requestBodyJson = JSONObject().apply {
+                put("contents", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().apply { put("text", "$userPrompt$memoryContext") })
+                        })
+                    })
+                })
+                put("systemInstruction", JSONObject().apply {
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().apply { put("text", systemInstruction) })
+                    })
+                })
+                put("generationConfig", JSONObject().apply {
+                    put("temperature", 0.4)
+                    put("maxOutputTokens", 180)
+                })
+            }
+
+            val requestBodyString = requestBodyJson.toString()
+
+            for (model in candidateModels) {
+                try {
+                    val request = Request.Builder()
+                        .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
+                        .post(requestBodyString.toRequestBody(jsonMediaType))
+                        .build()
+
+                    val response = okHttpClient.newCall(request).execute()
+                    val responseBody = response.body?.string() ?: ""
+
+                    if (response.isSuccessful) {
+                        val rootJson = JSONObject(responseBody)
+                        val candidates = rootJson.optJSONArray("candidates")
+                        val firstCandidate = candidates?.optJSONObject(0)
+                        val content = firstCandidate?.optJSONObject("content")
+                        val parts = content?.optJSONArray("parts")
+                        val textOutput = parts?.optJSONObject(0)?.optString("text")?.trim() ?: ""
+
+                        if (textOutput.isNotBlank()) {
+                            Log.i(tag, "Gemini Conversational reply via $model: $textOutput")
+                            return@withContext textOutput
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Conversational call via $model failed: ${e.message}")
+                }
+            }
+
+            return@withContext "नमस्ते! मैं आपकी बात समझ गया। बताइए मैं आपकी क्या सहायता करूँ?"
+        } catch (e: Exception) {
+            Log.e(tag, "Error in generateConversationalReply", e)
+            return@withContext "नमस्ते! मैं मैक्स हूँ, बताइए मैं क्या मदद करूँ?"
+        }
+    }
+
+    /**
+     * Micro-classification with Gemini Flash for ambiguous inputs (Output strictly 'TASK' or 'CONVERSATION')
+     */
+    suspend fun classifyIntentViaGemini(userPrompt: String): String = withContext(Dispatchers.IO) {
+        val apiKey = getApiKey()
+        if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
+            return@withContext "TASK"
+        }
+
+        try {
+            val systemPrompt = "Classify user voice input into either 'TASK' (user wants device/app action performed like toggle, open app, set alarm, lock) or 'CONVERSATION' (user asks question, greeting, explanation, joke, chit-chat). Output ONLY the word 'TASK' or 'CONVERSATION'."
+            val requestBodyJson = JSONObject().apply {
+                put("contents", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().apply { put("text", userPrompt) })
+                        })
+                    })
+                })
+                put("systemInstruction", JSONObject().apply {
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().apply { put("text", systemPrompt) })
+                    })
+                })
+                put("generationConfig", JSONObject().apply {
+                    put("temperature", 0.0)
+                    put("maxOutputTokens", 10)
+                })
+            }
+
+            val request = Request.Builder()
+                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
+                .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            if (response.isSuccessful) {
+                val root = JSONObject(responseBody)
+                val text = root.optJSONArray("candidates")?.optJSONObject(0)
+                    ?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text")?.trim() ?: "TASK"
+                if (text.contains("CONVERSATION", ignoreCase = true)) return@withContext "CONVERSATION"
+            }
+            return@withContext "TASK"
+        } catch (e: Exception) {
+            Log.w(tag, "Intent classification via Gemini failed, defaulting to TASK: ${e.message}")
+            return@withContext "TASK"
+        }
+    }
+
+    /**
      * Multimodal Gemini Vision analysis with ultra-compact image payload (512px, ~25KB)
      * and low-latency response generation.
      */
