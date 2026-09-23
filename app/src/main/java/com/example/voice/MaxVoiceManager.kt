@@ -50,13 +50,10 @@ class MaxVoiceManager(
     }
 
     private fun initTts() {
-        textToSpeech = TextToSpeech(context) { status ->
+        // Prefer Google TTS engine if available on device for best natural voice models
+        textToSpeech = TextToSpeech(context, { status ->
             if (status == TextToSpeech.SUCCESS) {
-                val hindiLocale = Locale("hi", "IN")
-                val res = textToSpeech?.setLanguage(hindiLocale)
-                if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    textToSpeech?.language = Locale.getDefault()
-                }
+                configureNaturalVoice()
 
                 textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
@@ -72,10 +69,65 @@ class MaxVoiceManager(
                     }
                 })
                 isTtsReady = true
-                Log.i(tag, "TTS initialized successfully.")
+                Log.i(tag, "Natural Jarvis-Quality TTS initialized successfully.")
             } else {
                 Log.e(tag, "TTS initialization failed with status: $status")
             }
+        }, "com.google.android.tts")
+    }
+
+    private fun configureNaturalVoice() {
+        val tts = textToSpeech ?: return
+        val hindiLocale = Locale("hi", "IN")
+
+        try {
+            // 1. AudioAttributes for clean Assistant speech output
+            tts.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+
+            // 2. Query available device voices for highest quality Hindi variant
+            val availableVoices = tts.voices ?: emptySet()
+            val hindiVoices = availableVoices.filter { v ->
+                v.locale.language == "hi" || v.locale.country == "IN" ||
+                        v.name.lowercase().contains("hi_in") || v.name.lowercase().contains("hindi")
+            }
+
+            Log.i(tag, "Found ${hindiVoices.size} Hindi TTS voices on device.")
+
+            // Prioritize high-quality network/neural Hindi voices (e.g. hi-in-x-hid-network, hi-in-x-hic-network)
+            val bestVoice = hindiVoices.firstOrNull { v ->
+                (v.quality >= Voice.QUALITY_HIGH) && (
+                        v.name.contains("network", ignoreCase = true) ||
+                        v.name.contains("neural", ignoreCase = true) ||
+                        v.name.contains("natural", ignoreCase = true)
+                )
+            } ?: hindiVoices.firstOrNull { v ->
+                v.quality >= Voice.QUALITY_HIGH
+            } ?: hindiVoices.firstOrNull { v ->
+                v.name.contains("network", ignoreCase = true)
+            } ?: hindiVoices.firstOrNull()
+
+            if (bestVoice != null) {
+                tts.voice = bestVoice
+                Log.i(tag, "Selected Natural Voice: '${bestVoice.name}' (Quality: ${bestVoice.quality}, Network: ${bestVoice.isNetworkConnectionRequired})")
+            } else {
+                val res = tts.setLanguage(hindiLocale)
+                if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    tts.language = Locale.getDefault()
+                }
+                Log.i(tag, "Using default Hindi locale fallback for TTS.")
+            }
+
+            // 3. Pitch & Rate tuning for warm, natural Jarvis tone
+            tts.setPitch(0.98f) // Slightly lower pitch for warm resonance
+            tts.setSpeechRate(0.98f) // Natural conversational speed
+        } catch (e: Exception) {
+            Log.e(tag, "Error configuring natural TTS voice", e)
+            tts.language = hindiLocale
         }
     }
 
@@ -212,18 +264,49 @@ class MaxVoiceManager(
         }
     }
 
-    fun speak(text: String, speechRate: Float = 1.0f) {
+    private fun prepareNaturalSpeechText(rawText: String): String {
+        return rawText
+            .replace(Regex("\\[.*?\\]"), "") // Remove log tags like [वर्गीकरण: ...]
+            .replace(Regex("https?://\\S+"), "लिंक")
+            .replace(Regex("com\\.[a-zA-Z0-9.]+"), "ऐप")
+            .replace("°C", " डिग्री सेल्सियस")
+            .replace("%", " प्रतिशत")
+            .replace("kg", " किलोग्राम")
+            .replace("km/h", " किलोमीटर प्रति घंटा")
+            .replace("km", " किलोमीटर")
+            .replace("->", " ")
+            .replace("➔", " ")
+            .replace("⚡", "")
+            .replace("🛡", "")
+            .replace("📷", "")
+            .replace("💬", "")
+            .replace("⏰", "")
+            .replace("🌤", "")
+            .replace("📍", "")
+            .replace("🌡", "")
+            .replace("☁️", "")
+            .replace("💧", "")
+            .replace("💨", "")
+            .replace("  ", " ")
+            .trim()
+    }
+
+    fun speak(text: String, speechRate: Float = 0.98f) {
         if (!isTtsReady || textToSpeech == null) {
             Log.w(tag, "TTS is not ready yet.")
             return
         }
         try {
-            textToSpeech?.setSpeechRate(speechRate.coerceIn(0.7f, 1.5f))
-            textToSpeech?.setPitch(1.0f)
+            val cleanSpeechText = prepareNaturalSpeechText(text)
+            if (cleanSpeechText.isBlank()) return
+
+            textToSpeech?.setSpeechRate(speechRate.coerceIn(0.80f, 1.25f))
+            textToSpeech?.setPitch(0.98f) // Warm natural Jarvis pitch
+
             val params = Bundle().apply {
                 putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "max_tts_${System.currentTimeMillis()}")
             }
-            textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "max_tts_${System.currentTimeMillis()}")
+            textToSpeech?.speak(cleanSpeechText, TextToSpeech.QUEUE_FLUSH, params, "max_tts_${System.currentTimeMillis()}")
         } catch (e: Exception) {
             Log.e(tag, "speak error", e)
         }
@@ -232,12 +315,13 @@ class MaxVoiceManager(
     fun speakInstantFiller(fillerText: String = "जी, अभी करता हूँ...") {
         if (!isTtsReady || textToSpeech == null) return
         try {
+            val cleanFiller = prepareNaturalSpeechText(fillerText)
             textToSpeech?.setSpeechRate(1.0f)
-            textToSpeech?.setPitch(1.0f)
+            textToSpeech?.setPitch(0.98f)
             val params = Bundle().apply {
                 putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "max_filler_${System.currentTimeMillis()}")
             }
-            textToSpeech?.speak(fillerText, TextToSpeech.QUEUE_FLUSH, params, "max_filler_${System.currentTimeMillis()}")
+            textToSpeech?.speak(cleanFiller, TextToSpeech.QUEUE_FLUSH, params, "max_filler_${System.currentTimeMillis()}")
         } catch (e: Exception) {
             Log.e(tag, "speakInstantFiller error", e)
         }

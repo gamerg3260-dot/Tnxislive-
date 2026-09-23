@@ -857,8 +857,8 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
                 _agentStatus.value = AgentStatus.EXECUTING
                 _statusMessage.value = action.voiceResponseHindi
 
-                // Speak immediately
-                voiceManager.speak(action.voiceResponseHindi, 1.08f)
+                // Speak immediately with natural conversational speed
+                voiceManager.speak(action.voiceResponseHindi, 0.98f)
 
                 val execResult = executeAssistantAction(action)
                 addLog("एक्शन परिणाम: ${execResult.message}")
