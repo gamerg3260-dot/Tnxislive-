@@ -71,15 +71,18 @@ object IntelligenceLayerEngine {
         "par le chalo", "me le chalo", "laga do", "chalu karo", "dekho", "khool do"
     )
 
-    // Affirmation words for pending confirmation
+    // Affirmation words for pending confirmation (English, Hinglish, Devanagari)
     private val AFFIRMATIVE_WORDS = listOf(
-        "haan", "ha", "yes", "sahi hai", "wahi", "khol do", "chalao", "ok", "okay",
-        "haan ji", "sahi", "wahi wala", "chala do", "ha kholo"
+        "haan", "ha", "yes", "yeah", "yep", "sure", "ok", "okay", "sahi hai", "wahi", "khol do", "chalao",
+        "haan ji", "sahi", "wahi wala", "chala do", "ha kholo", "haan kholo", "haan wahi", "confirm", "kardo",
+        "हाँ", "हां", "जी", "जी हां", "जी हाँ", "हाँ जी", "हाँ खोलो", "खोलो", "खोल दो", "चलाओ", "चला दो",
+        "ओपन करो", "कर दो", "सही है", "वही", "वही वाला", "कन्फर्म", "करो", "चालू करो"
     )
 
-    // Denial words for pending confirmation
+    // Denial words for pending confirmation (English, Hinglish, Devanagari)
     private val NEGATIVE_WORDS = listOf(
-        "nahi", "na", "no", "galat", "mat kholo", "cancel", "stop", "reh ne do"
+        "nahi", "na", "no", "nope", "galat", "mat kholo", "cancel", "stop", "reh ne do", "rehne do", "don't",
+        "नहीं", "नही", "ना", "जी नहीं", "गलत", "मत खोलो", "रहने दो", "कैंसल", "कैंसिल", "रद्द करो", "बंद करो"
     )
 
     /**
@@ -116,12 +119,24 @@ object IntelligenceLayerEngine {
 
     fun isAffirmative(query: String): Boolean {
         val lower = query.lowercase().trim()
-        return AFFIRMATIVE_WORDS.any { lower.contains(it) }
+            .replace(",", "").replace(".", "").replace("!", "").replace("?", "")
+        val words = lower.split(" ").filter { it.isNotBlank() }
+        if (words.size <= 3 && AFFIRMATIVE_WORDS.any { lower == it || lower.contains(it) }) {
+            return true
+        }
+        val strongYes = listOf("haan", "ha", "yes", "ji", "हाँ", "हां", "जी", "sahi hai", "confirm", "yep", "yeah")
+        return strongYes.any { lower == it || lower.startsWith("$it ") || lower.endsWith(" $it") }
     }
 
     fun isNegative(query: String): Boolean {
         val lower = query.lowercase().trim()
-        return NEGATIVE_WORDS.any { lower.contains(it) }
+            .replace(",", "").replace(".", "").replace("!", "").replace("?", "")
+        val words = lower.split(" ").filter { it.isNotBlank() }
+        if (words.size <= 3 && NEGATIVE_WORDS.any { lower == it || lower.contains(it) }) {
+            return true
+        }
+        val strongNo = listOf("nahi", "na", "no", "galat", "नहीं", "नही", "ना", "cancel", "stop")
+        return strongNo.any { lower == it || lower.startsWith("$it ") || lower.endsWith(" $it") }
     }
 
     /**
@@ -244,20 +259,11 @@ object IntelligenceLayerEngine {
             confidenceLevel = "HIGH"
             log2 = "LAYER2_CONFIDENCE: 100% (Hardware/System Toggle) -> Confirmation skipped, direct execution"
         } else if (baseDecision.matchedAppName != null) {
-            val spokenCandidate = extractSpokenCandidate(cleanedInput, baseDecision.matchedAppName!!)
-            val isExactOrAlias = isExactOrAliasMatch(spokenCandidate, baseDecision.matchedAppName!!, context)
-
-            if (isExactOrAlias) {
-                confidenceScore = 95
-                confidenceLevel = "HIGH"
-                log2 = "LAYER2_CONFIDENCE: 95% (High Match: '${baseDecision.matchedAppName}') -> Direct execution"
-            } else {
-                confidenceScore = 65
-                confidenceLevel = "MEDIUM"
-                needsConfirmation = true
-                confirmationPrompt = "क्या आपका मतलब ${baseDecision.matchedAppName} से है?"
-                log2 = "LAYER2_CONFIDENCE: 65% (Medium Match: '${baseDecision.matchedAppName}') -> Asking confirmation: '${baseDecision.matchedAppName} se matlab hai?'"
-            }
+            confidenceScore = 95
+            confidenceLevel = "HIGH"
+            needsConfirmation = false
+            confirmationPrompt = null
+            log2 = "LAYER2_CONFIDENCE: 95% (High App Match: '${baseDecision.matchedAppName}') -> Confirmation SKIPPED, direct execution"
         } else if (baseDecision.category == CommandCategory.CONVERSATION || baseDecision.category == CommandCategory.SCREEN_TASK) {
             confidenceScore = 88
             confidenceLevel = "HIGH"

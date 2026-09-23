@@ -383,31 +383,79 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    var isAwaitingConfirmation: Boolean = false
+        private set
+    var pendingAppName: String? = null
+        private set
+    var pendingFullCommand: String? = null
+        private set
     private var pendingConfirmationDecision: CommandRoutingDecision? = null
+
+    private fun setConfirmationState(appName: String?, fullCommand: String, decision: CommandRoutingDecision) {
+        isAwaitingConfirmation = true
+        pendingAppName = appName
+        pendingFullCommand = fullCommand
+        pendingConfirmationDecision = decision
+
+        val logMsg = "CONFIRMATION_STATE_SET: awaiting=true, pendingApp=${appName ?: "NONE"}, pendingCommand=$fullCommand"
+        addLog(logMsg)
+        Log.i("MaxViewModel", logMsg)
+    }
+
+    private fun clearConfirmationState() {
+        isAwaitingConfirmation = false
+        pendingAppName = null
+        pendingFullCommand = null
+        pendingConfirmationDecision = null
+    }
 
     fun processCommand(commandText: String) {
         if (commandText.isBlank()) return
         _lastVoiceInput.value = commandText
         addLog("आवाज रिकॉर्ड हुई: \"$commandText\"")
 
+        val nextInputLog = "NEXT_INPUT_CHECK: isAwaitingConfirmation=$isAwaitingConfirmation"
+        addLog(nextInputLog)
+        Log.i("MaxViewModel", nextInputLog)
+
         viewModelScope.launch {
-            // Check for Pending Confirmation Response
-            val pending = pendingConfirmationDecision
-            if (pending != null) {
+            // =========================================================================
+            // STEP 0: FIRST CHECK — Pending Confirmation State Check (BEFORE ROUTER)
+            // =========================================================================
+            if (isAwaitingConfirmation) {
+                val pendingCmd = pendingFullCommand ?: commandText
+                val pendingDecision = pendingConfirmationDecision
+
                 if (IntelligenceLayerEngine.isAffirmative(commandText)) {
-                    addLog("LAYER2_CONFIDENCE: User CONFIRMED action -> Executing ${pending.matchedAppName}")
-                    pendingConfirmationDecision = null
-                    executeDecision(pending, commandText)
+                    val resolvedLog = "CONFIRMATION_RESOLVED: response=haan, executing=$pendingCmd"
+                    addLog(resolvedLog)
+                    Log.i("MaxViewModel", resolvedLog)
+
+                    clearConfirmationState()
+
+                    if (pendingDecision != null) {
+                        executeDecision(pendingDecision, pendingCmd)
+                    } else {
+                        val freshIntel = IntelligenceLayerEngine.processWithIntelligence(getApplication(), pendingCmd)
+                        executeDecision(freshIntel.baseRoutingDecision, pendingCmd)
+                    }
                     return@launch
                 } else if (IntelligenceLayerEngine.isNegative(commandText)) {
-                    addLog("LAYER2_CONFIDENCE: User DENIED action -> Cancellation")
-                    pendingConfirmationDecision = null
-                    _statusMessage.value = "ठीक है, कैंसिल कर दिया गया।"
-                    voiceManager.speak("Thik hai, cancel kar diya.", 0.98f)
+                    val resolvedLog = "CONFIRMATION_RESOLVED: response=nahi, executing=CANCEL"
+                    addLog(resolvedLog)
+                    Log.i("MaxViewModel", resolvedLog)
+
+                    clearConfirmationState()
+                    val cancelMsg = "ठीक है, कैंसिल कर दिया। आप क्या करना चाहते हैं?"
+                    _statusMessage.value = cancelMsg
+                    voiceManager.speak(cancelMsg, 0.98f)
                     _agentStatus.value = AgentStatus.IDLE
                     return@launch
                 } else {
-                    pendingConfirmationDecision = null
+                    val resolvedLog = "CONFIRMATION_RESOLVED: response=new_command, overriding pending '$pendingCmd' with '$commandText'"
+                    addLog(resolvedLog)
+                    Log.i("MaxViewModel", resolvedLog)
+                    clearConfirmationState()
                 }
             }
 
@@ -462,7 +510,7 @@ class MaxViewModel(application: Application) : AndroidViewModel(application) {
 
             // LAYER 2 — User Confirmation Needed
             if (intelDecision.needsUserConfirmation) {
-                pendingConfirmationDecision = decision
+                setConfirmationState(decision.matchedAppName, commandText, decision)
                 val prompt = intelDecision.confirmationPromptHindi ?: "क्या आपका मतलब ${decision.matchedAppName} से है?"
                 _statusMessage.value = prompt
                 voiceManager.speak(prompt, 0.98f)
